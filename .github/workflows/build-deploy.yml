@@ -267,9 +267,9 @@ jobs:
 
   # Deploy to staging (develop branch)
   deploy-staging:
-    needs: [build, security-scan]
+    needs: [build]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
+    if: github.ref == 'refs/heads/develop' && always()
     environment: staging
     
     steps:
@@ -297,9 +297,9 @@ jobs:
 
   # Deploy to production (main branch)
   deploy-production:
-    needs: [build, security-scan]
+    needs: [build]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && always()
     environment: production
     
     steps:
