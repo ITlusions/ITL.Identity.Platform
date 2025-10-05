@@ -171,15 +171,48 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
+    - name: Wait for image propagation
+      run: |
+        echo "Waiting for image to be available in registry..."
+        sleep 30
+
+    - name: Determine scan target
+      id: scan-target
+      run: |
+        # Use the latest tag for main branch, otherwise use SHA-based tag
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          SCAN_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        else
+          SCAN_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}"
+        fi
+        echo "scan-image=${SCAN_IMAGE}" >> $GITHUB_OUTPUT
+        echo "Will scan: ${SCAN_IMAGE}"
+
     - name: Verify image exists
       run: |
-        echo "Verifying image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-        docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        echo "Verifying image: ${{ steps.scan-target.outputs.scan-image }}"
+        
+        # Try to inspect the image with retries
+        for i in {1..5}; do
+          if docker manifest inspect "${{ steps.scan-target.outputs.scan-image }}"; then
+            echo "Image found successfully"
+            exit 0
+          else
+            echo "Attempt $i failed, waiting 30 seconds..."
+            sleep 30
+          fi
+        done
+        
+        echo "Image not found after retries. Checking available tags..."
+        # List available tags for debugging
+        curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+             "https://ghcr.io/v2/${{ env.IMAGE_NAME }}/tags/list" || true
+        exit 1
 
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        image-ref: ${{ steps.scan-target.outputs.scan-image }}
         format: 'sarif'
         output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
