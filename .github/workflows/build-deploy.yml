@@ -155,29 +155,29 @@ jobs:
         sarif_file: 'trivy-results.sarif'
 
   # Package Helm chart
-  package-helm:
-    needs: [helm-lint]
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+  # package-helm:
+  #   needs: [helm-lint]
+  #   runs-on: ubuntu-latest
+  #   if: github.ref == 'refs/heads/main'
     
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+  #   steps:
+  #   - name: Checkout repository
+  #     uses: actions/checkout@v4
 
-    - name: Set up Helm
-      uses: azure/setup-helm@v3
-      with:
-        version: '3.12.0'
+  #   - name: Set up Helm
+  #     uses: azure/setup-helm@v3
+  #     with:
+  #       version: '3.12.0'
 
-    - name: Package Helm chart
-      run: |
-        helm package charts/identity-docs --destination ./helm-packages
+  #   - name: Package Helm chart
+  #     run: |
+  #       helm package charts/identity-docs --destination ./helm-packages
 
-    - name: Upload Helm package
-      uses: actions/upload-artifact@v3
-      with:
-        name: helm-chart
-        path: helm-packages/*.tgz
+  #   - name: Upload Helm package
+  #     uses: actions/upload-artifact@v3
+  #     with:
+  #       name: helm-chart
+  #       path: helm-packages/*.tgz
         retention-days: 30
 
   # Deploy to staging (develop branch)
