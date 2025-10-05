@@ -1,0 +1,188 @@
+---
+# Source: identity-docs/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: identity-docs
+  namespace: default
+  labels:
+    helm.sh/chart: identity-docs-1.0.0
+    app.kubernetes.io/name: identity-docs
+    app.kubernetes.io/instance: identity-docs
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: documentation
+    app.kubernetes.io/part-of: itl-platform
+---
+# Source: identity-docs/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: identity-docs
+  namespace: default
+  labels:
+    helm.sh/chart: identity-docs-1.0.0
+    app.kubernetes.io/name: identity-docs
+    app.kubernetes.io/instance: identity-docs
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: documentation
+    app.kubernetes.io/part-of: itl-platform
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: identity-docs
+    app.kubernetes.io/instance: identity-docs
+---
+# Source: identity-docs/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: identity-docs
+  namespace: default
+  labels:
+    helm.sh/chart: identity-docs-1.0.0
+    app.kubernetes.io/name: identity-docs
+    app.kubernetes.io/instance: identity-docs
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: documentation
+    app.kubernetes.io/part-of: itl-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: identity-docs
+      app.kubernetes.io/instance: identity-docs
+  template:
+    metadata:
+      annotations:
+      labels:
+        app.kubernetes.io/name: identity-docs
+        app.kubernetes.io/instance: identity-docs
+    spec:
+      serviceAccountName: identity-docs
+      securityContext:
+        fsGroup: 2000
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: identity-docs
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+          image: ghcr.io/itlusions/identity-docs:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          env:
+            - name: NGINX_ENTRYPOINT_QUIET_LOGS
+              value: "1"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: var-cache-nginx
+              mountPath: /var/cache/nginx
+            - name: var-run
+              mountPath: /var/run
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: var-cache-nginx
+          emptyDir: {}
+        - name: var-run
+          emptyDir: {}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - identity-docs
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+---
+# Source: identity-docs/templates/ingressroute.yaml
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: identity-docs
+  namespace: default
+  labels:
+    helm.sh/chart: identity-docs-1.0.0
+    app.kubernetes.io/name: identity-docs
+    app.kubernetes.io/instance: identity-docs
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: documentation
+    app.kubernetes.io/part-of: itl-platform
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`docs.itlusions.com`) && PathPrefix(`/identity`)
+      kind: Rule
+      services:
+        - name: identity-docs
+          port: 80
+      middlewares:
+        - name: identity-stripprefix
+  tls:
+    secretName: docs-tls-cert
+---
+# Source: identity-docs/templates/middleware.yaml
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: identity-docs-stripprefix
+  namespace: default
+  labels:
+    helm.sh/chart: identity-docs-1.0.0
+    app.kubernetes.io/name: identity-docs
+    app.kubernetes.io/instance: identity-docs
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: documentation
+    app.kubernetes.io/part-of: itl-platform
+spec:
+  stripPrefix:
+    prefixes:
+      - /identity
