@@ -24,6 +24,7 @@ function Show-Help {
     Write-Host "  helm-template     Generate Kubernetes manifests (without validation)"
     Write-Host "  helm-validate     Validate Kubernetes manifests"
     Write-Host "  test              Test documentation build"
+    Write-Host "  security          Run security scan on local Docker image"
     Write-Host "  ci-test           Run CI tests locally"
     Write-Host "  all               Run all build steps"
 }
@@ -97,6 +98,28 @@ function Test-Build {
     Write-Host "Documentation built successfully" -ForegroundColor Green
 }
 
+function Test-Security {
+    Write-Host "Running security scan on local Docker image..." -ForegroundColor Yellow
+    
+    # Check if trivy is available
+    $trivy = Get-Command trivy -ErrorAction SilentlyContinue
+    if ($trivy) {
+        # Scan the local image (if it exists)
+        $imageName = "ghcr.io/itlusions/identity-docs:latest"
+        $localImage = docker images --format "table {{.Repository}}:{{.Tag}}" | Select-String $imageName
+        
+        if ($localImage) {
+            Write-Host "Scanning image: $imageName" -ForegroundColor Cyan
+            trivy image --severity HIGH,CRITICAL --ignore-unfixed $imageName
+        } else {
+            Write-Host "Local image not found. Build the image first with: .\build.ps1 docker-build" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "Trivy not found. Install from: https://github.com/aquasecurity/trivy" -ForegroundColor Yellow
+        Write-Host "Or use the CI pipeline for security scanning." -ForegroundColor Cyan
+    }
+}
+
 function Run-CiTest {
     Write-Host "Running CI tests locally..." -ForegroundColor Yellow
     Test-Build
@@ -127,6 +150,7 @@ switch ($Command.ToLower()) {
     "helm-template" { Template-Helm }
     "helm-validate" { Validate-Helm }
     "test" { Test-Build }
+    "security" { Test-Security }
     "ci-test" { Run-CiTest }
     "all" { Run-All }
     default {
