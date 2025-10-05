@@ -178,7 +178,7 @@ jobs:
   #     with:
   #       name: helm-chart
   #       path: helm-packages/*.tgz
-        retention-days: 30
+  #      retention-days: 30
 
   # Deploy to staging (develop branch)
   deploy-staging:
@@ -199,7 +199,7 @@ jobs:
 
   # Deploy to production (main branch)
   deploy-production:
-    needs: [build, package-helm]
+    needs: [build]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
     environment: production
@@ -208,20 +208,20 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
-      with:
-        version: 'v1.28.0'
+    # - name: Set up kubectl
+    #   uses: azure/setup-kubectl@v3
+    #   with:
+    #     version: 'v1.28.0'
 
-    - name: Deploy to production
-      run: |
-        echo "Deploying to production environment"
-        echo "Image: ${{ needs.build.outputs.image-tag }}"
-        # Add your production deployment logic here
-        # This could be:
-        # - kubectl apply with Kustomize
-        # - ArgoCD app sync
-        # - Helm upgrade
+    # - name: Deploy to production
+    #   run: |
+    #     echo "Deploying to production environment"
+    #     echo "Image: ${{ needs.build.outputs.image-tag }}"
+    #     # Add your production deployment logic here
+    #     # This could be:
+    #     # - kubectl apply with Kustomize
+    #     # - ArgoCD app sync
+    #     # - Helm upgrade
         
     - name: Create GitHub Release
       if: github.ref == 'refs/heads/main'
@@ -242,18 +242,18 @@ jobs:
         draft: false
         prerelease: false
 
-  # Notify deployment status
-  notify:
-    needs: [deploy-production]
-    runs-on: ubuntu-latest
-    if: always()
+  # # Notify deployment status
+  # notify:
+  #   needs: [deploy-production]
+  #   runs-on: ubuntu-latest
+  #   if: always()
     
-    steps:
-    - name: Notify Slack
-      if: always()
-      uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ job.status }}
-        channel: '#platform-deployments'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
-        fields: repo,message,commit,author,action,eventName,ref,workflow
+  #   steps:
+  #   - name: Notify Slack
+  #     if: always()
+  #     uses: 8398a7/action-slack@v3
+  #     with:
+  #       status: ${{ job.status }}
+  #       channel: '#platform-deployments'
+  #       webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+  #       fields: repo,message,commit,author,action,eventName,ref,workflow
