@@ -1,0 +1,49 @@
+# Production environment values
+environment: production
+
+replicaCount: 3
+
+image:
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+ingressRoute:
+  enabled: true
+  routes:
+    - match: Host(`docs.itlusions.com`) && PathPrefix(`/identity`)
+      kind: Rule
+      middlewares:
+        - name: identity-stripprefix
+  tls:
+    secretName: docs-tls-cert
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+    - labelSelector:
+        matchExpressions:
+        - key: app.kubernetes.io/name
+          operator: In
+          values:
+          - identity-docs
+      topologyKey: kubernetes.io/hostname
+
+serviceMonitor:
+  enabled: true
+  labels:
+    prometheus: kube-prometheus

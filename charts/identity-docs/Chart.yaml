@@ -1,0 +1,23 @@
+apiVersion: v2
+name: identity-docs
+description: ITL Identity Platform Documentation
+version: 1.0.0
+appVersion: "1.0.0"
+type: application
+
+keywords:
+  - documentation
+  - mkdocs
+  - identity
+  - platform
+
+home: https://docs.itlusions.com/identity/
+sources:
+  - https://github.com/ITlusions/ITL.identity.platform
+
+maintainers:
+  - name: ITlusions Platform Team
+    email: platform@itlusions.com
+
+annotations:
+  category: Documentation

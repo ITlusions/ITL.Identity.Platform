@@ -1,0 +1,54 @@
+# Docker Compose with OIDC Authentication
+# This extends the existing docker-compose.yml with OAuth2 Proxy
+
+services:
+  # OAuth2 Proxy for authentication
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.5.1
+    container_name: itl-docs-oauth2-proxy
+    command:
+      - --config=/etc/oauth2-proxy.cfg
+    ports:
+      - "8080:4180"  # OAuth2 Proxy exposed port
+    volumes:
+      - ./oauth2-proxy.cfg:/etc/oauth2-proxy.cfg:ro
+    environment:
+      OAUTH2_PROXY_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+    depends_on:
+      - identity-docs
+    restart: unless-stopped
+    networks:
+      - docs-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4180/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Documentation backend (now internal)
+  identity-docs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: itl-docs-backend
+    # Remove external port mapping - only accessible via OAuth2 Proxy
+    expose:
+      - "80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+    networks:
+      - docs-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  docs-network:
+    driver: bridge

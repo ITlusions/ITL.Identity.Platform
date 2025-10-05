@@ -1,0 +1,13 @@
+{{- if .Values.middleware.stripPrefix.enabled -}}
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "identity-docs.fullname" . }}-stripprefix
+  namespace: {{ include "identity-docs.namespace" . }}
+  labels:
+    {{- include "identity-docs.labels" . | nindent 4 }}
+spec:
+  stripPrefix:
+    prefixes:
+      {{- toYaml .Values.middleware.stripPrefix.prefixes | nindent 6 }}
+{{- end }}

@@ -1,0 +1,36 @@
+services:
+  identity-docs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docs:/app/docs:ro
+      - ./mkdocs.yml:/app/mkdocs.yml:ro
+    environment:
+      - NGINX_ENTRYPOINT_QUIET_LOGS=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  # Development server with live reload
+  mkdocs-dev:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    command: >
+      bash -c "
+        pip install -r requirements.txt &&
+        mkdocs serve --dev-addr=0.0.0.0:8000
+      "
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

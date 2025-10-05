@@ -1,0 +1,259 @@
+name: Build and Deploy Documentation
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths: 
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'charts/**'
+      - '.github/workflows/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'requirements.txt'
+      - 'Dockerfile'
+      - 'charts/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: itlusions/identity-docs
+
+jobs:
+  # Test and validate documentation
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Cache Python dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Test MkDocs build
+      run: |
+        mkdocs build --strict
+
+    - name: Check links (if linkchecker available)
+      run: |
+        pip install linkchecker || true
+        if command -v linkchecker &> /dev/null; then
+          mkdocs serve &
+          sleep 5
+          linkchecker http://127.0.0.1:8000 --check-extern || true
+          pkill -f mkdocs
+        fi
+
+  # Lint Helm chart
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Lint Helm chart
+      run: |
+        helm lint charts/identity-docs
+        helm template identity-docs charts/identity-docs --debug
+
+    - name: Validate Kubernetes manifests
+      run: |
+        helm template identity-docs charts/identity-docs > manifests.yaml
+        # Install kubeval for validation
+        curl -L https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz | tar xz
+        sudo mv kubeval /usr/local/bin
+        kubeval manifests.yaml
+
+  # Build and push Docker image
+  build:
+    needs: [test, helm-lint]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      if: github.event_name != 'pull_request'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value={{branch}},enable={{is_default_branch}}
+
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+    - name: Run Trivy vulnerability scanner
+      if: github.event_name != 'pull_request'
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      if: github.event_name != 'pull_request'
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Package Helm chart
+  package-helm:
+    needs: [helm-lint]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Package Helm chart
+      run: |
+        helm package charts/identity-docs --destination ./helm-packages
+
+    - name: Upload Helm package
+      uses: actions/upload-artifact@v3
+      with:
+        name: helm-chart
+        path: helm-packages/*.tgz
+        retention-days: 30
+
+  # Deploy to staging (develop branch)
+  deploy-staging:
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Deploy to staging
+      run: |
+        echo "Deploying to staging environment"
+        # Add your staging deployment logic here
+        # kubectl apply -f k8s/staging/ or ArgoCD sync
+
+  # Deploy to production (main branch)
+  deploy-production:
+    needs: [build, package-helm]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment"
+        echo "Image: ${{ needs.build.outputs.image-tag }}"
+        # Add your production deployment logic here
+        # This could be:
+        # - kubectl apply with Kustomize
+        # - ArgoCD app sync
+        # - Helm upgrade
+        
+    - name: Create GitHub Release
+      if: github.ref == 'refs/heads/main'
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: docs-${{ github.sha }}
+        release_name: Documentation Release ${{ github.sha }}
+        body: |
+          Automated release of Identity Platform documentation
+          
+          **Changes:**
+          ${{ github.event.head_commit.message }}
+          
+          **Docker Image:** 
+          `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}`
+        draft: false
+        prerelease: false
+
+  # Notify deployment status
+  notify:
+    needs: [deploy-production]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Notify Slack
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#platform-deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow

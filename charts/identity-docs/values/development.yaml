@@ -1,0 +1,36 @@
+# Development environment values
+environment: development
+
+replicaCount: 1
+
+image:
+  tag: "develop"
+  pullPolicy: Always
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+ingressRoute:
+  enabled: true
+  routes:
+    - match: Host(`docs-dev.itlusions.com`) && PathPrefix(`/identity`)
+      kind: Rule
+      middlewares:
+        - name: identity-stripprefix
+  tls:
+    secretName: docs-dev-tls-cert
+
+autoscaling:
+  enabled: false
+
+healthCheck:
+  initialDelaySeconds: 5
+  periodSeconds: 15
+
+serviceMonitor:
+  enabled: false

@@ -1,0 +1,413 @@
+# ITL Identity Platform .gitignore
+
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.env.*
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# =============================================================================
+# MkDocs
+# =============================================================================
+site/
+.mkdocs_cache/
+
+# =============================================================================
+# Docker
+# =============================================================================
+# Docker compose environment files
+docker-compose.override.yml
+.env.local
+.env.dev
+.env.prod
+.env.production
+.env.development
+.env.staging
+
+# Docker volumes
+volumes/
+data/
+
+# =============================================================================
+# Kubernetes
+# =============================================================================
+# Sensitive Kubernetes files
+secrets.yaml
+secret.yaml
+*-secret.yaml
+*-secrets.yaml
+
+# Kubeconfig files
+kubeconfig
+.kubeconfig
+*.kubeconfig
+
+# Kubernetes local testing
+kubectl-debug-*
+
+# =============================================================================
+# OIDC / OAuth2
+# =============================================================================
+# OAuth2 Proxy sensitive configs
+.env.oidc
+oauth2-proxy-secrets.cfg
+client-secrets.json
+keycloak-secrets.yaml
+
+# JWT tokens and keys
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+jwt-keys/
+certificates/
+private-keys/
+
+# =============================================================================
+# IDE and Editor files
+# =============================================================================
+# Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+
+# Local History for Visual Studio Code
+.history/
+
+# Built Visual Studio Code Extensions
+*.vsix
+
+# JetBrains IDEs
+.idea/
+*.swp
+*.swo
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*~
+*.swp
+*.swo
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# =============================================================================
+# Operating System
+# =============================================================================
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# =============================================================================
+# Logs and Temporary files
+# =============================================================================
+logs/
+*.log
+*.log.*
+*.out
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# =============================================================================
+# Terraform (if used for infrastructure)
+# =============================================================================
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+terraform.tfvars.json
+*.tfplan
+*.tfplan.*
+.terraformrc
+terraform.rc
+
+# =============================================================================
+# Helm
+# =============================================================================
+# Helm charts dependencies
+charts/*/charts/
+charts/*/*.tgz
+charts/*/Chart.lock
+
+# Helm releases
+*.tgz
+
+# =============================================================================
+# ArgoCD
+# =============================================================================
+# ArgoCD application secrets
+argocd-secret.yaml
+argocd-cm.yaml.bak
+argocd-rbac-cm.yaml.bak
+
+# =============================================================================
+# Monitoring and Observability
+# =============================================================================
+# Prometheus data
+prometheus-data/
+grafana-data/
+alertmanager-data/
+
+# Jaeger traces
+jaeger-data/
+
+# =============================================================================
+# Backup and Archive files
+# =============================================================================
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+*.tmp
+*.temp
+*~
+.#*
+
+# Archive files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# =============================================================================
+# Development and Testing
+# =============================================================================
+# Local development files
+local/
+.local/
+dev/
+.dev/
+test-results/
+test-output/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache directories
+.cache/
+cache/
+.npm/
+.yarn/
+node_modules/
+
+# =============================================================================
+# Security and Secrets
+# =============================================================================
+# API keys and secrets
+api-keys.txt
+secrets.txt
+passwords.txt
+credentials.json
+service-account.json
+.secrets/
+
+# SSH keys
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# GPG keys
+*.gpg
+*.asc
+
+# =============================================================================
+# Generated files
+# =============================================================================
+# Auto-generated documentation
+*.generated.md
+auto-generated/
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Package files
+*.rpm
+*.deb
+*.pkg
+*.dmg
+
+# =============================================================================
+# Project-specific
+# =============================================================================
+# ITL Identity Platform specific
+identity-platform-data/
+keycloak-data/
+spire-data/
+teleport-data/
+
+# Documentation build cache
+.mkdocs-cache/
+docs-build/
+
+# Local configuration overrides
+local-config.yaml
+local-values.yaml
+override-values.yaml
+
+# Performance and profiling
+*.prof
+*.pprof
+*.trace
+
+# =============================================================================
+# End of .gitignore
+# =============================================================================

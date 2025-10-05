@@ -1,0 +1,30 @@
+{{- if .Values.ingressRoute.enabled -}}
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ include "identity-docs.fullname" . }}
+  namespace: {{ include "identity-docs.namespace" . }}
+  labels:
+    {{- include "identity-docs.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    {{- toYaml .Values.ingressRoute.entryPoints | nindent 4 }}
+  routes:
+    {{- range .Values.ingressRoute.routes }}
+    - match: {{ .match }}
+      kind: {{ .kind }}
+      services:
+        - name: {{ include "identity-docs.fullname" $ }}
+          port: {{ $.Values.service.port }}
+      {{- if .middlewares }}
+      middlewares:
+        {{- range .middlewares }}
+        - name: {{ .name }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- if .Values.ingressRoute.tls }}
+  tls:
+    secretName: {{ .Values.ingressRoute.tls.secretName }}
+  {{- end }}
+{{- end }}

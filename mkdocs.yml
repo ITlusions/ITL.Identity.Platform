@@ -1,0 +1,154 @@
+site_name: ITL Identity Platform
+site_description: ITL Identity Platform Architecture and Documentation
+site_author: ITlusions
+site_url: https://docs.itlusions.com/identity/
+
+# Repository
+repo_name: ITlusions/ITL.identity.platform
+repo_url: https://github.com/ITlusions/ITL.identity.platform
+edit_uri: edit/main/docs/
+
+# Copyright
+copyright: Copyright &copy; 2025 ITlusions
+
+# Configuration
+theme:
+  name: material
+  palette:
+    # Palette toggle for automatic mode
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - navigation.indexes
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+    - toc.integrate
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+# Plugins
+plugins:
+  - search:
+      separator: '[\s\-,:!=\[\]()"`/]+|\.(?!\d)|&[lg]t;|(?!\b)(?=[A-Z][a-z])'
+      lang: en
+  - mermaid2
+
+# Extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.magiclink:
+      normalize_issue_symbols: true
+      repo_url_shorthand: true
+      user: ITlusions
+      repo: ITL.identity.platform
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Page tree
+nav:
+  - Home: index.md
+  - Architecture:
+    - Architecture Vision (Phase A): architecture/overview.md
+    - Business Architecture (Phase B): architecture/business-architecture.md
+    - Information Architecture (Phase C): architecture/information-architecture.md
+    - Technology Architecture (Phase D): architecture/technology-architecture.md
+    - Implementation Planning (Phases E-H): architecture/implementation-planning.md
+    - Way of Working: architecture/way-of-working.md
+  - Implementation:
+    - Getting Started: implementation/getting-started.md
+    - Components: implementation/components.md
+  - Security:
+    - Security Model: security/security-model.md
+    - Compliance: security/compliance.md
+  - Operations:
+    - Deployment: operations/deployment.md
+    - Monitoring: operations/monitoring.md
+    - OIDC Authentication: operations/oidc-authentication.md
+  - Legacy Documentation:
+    - Architecture Navigation Guide: managed-identities-pim-architecture.md
+  - Appendices:
+    - TOGAF Appendix: appendix/togaf-appendix.md
+    - Compliance Mapping: appendix/compliance-mapping.md
+    - Security Framework: appendix/security-framework.md
+
+# Extra
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ITlusions
+  version:
+    provider: mike
+  # Configure for path-based routing
+  homepage: https://docs.itlusions.com/identity/
+  # Search configuration
+  search:
+    language: 'en'
+  # Analytics (optional - uncomment if needed)
+  # analytics:
+  #   provider: google
+  #   property: G-XXXXXXXXXX
