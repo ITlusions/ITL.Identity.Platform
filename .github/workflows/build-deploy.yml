@@ -111,7 +111,8 @@ jobs:
 
     outputs:
       image-digest: ${{ steps.build.outputs.digest }}
-      image-tag: ${{ steps.meta.outputs.tags }}
+      image-tags: ${{ steps.meta.outputs.tags }}
+      image-main-tag: ${{ steps.meta.outputs.tags }} # Will use the first tag for scanning
 
     steps:
     - name: Checkout repository
