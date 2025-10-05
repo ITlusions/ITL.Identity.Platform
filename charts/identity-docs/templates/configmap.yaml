@@ -1,0 +1,21 @@
+{{- if .Values.config.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "identity-docs.fullname" . }}
+  labels:
+    {{- include "identity-docs.labels" . | nindent 4 }}
+data:
+  {{- if .Values.config.nginx }}
+  nginx.conf: |
+    {{- .Values.config.nginx | nindent 4 }}
+  {{- end }}
+  {{- if .Values.config.mkdocs }}
+  mkdocs.yml: |
+    {{- .Values.config.mkdocs | nindent 4 }}
+  {{- end }}
+  {{- range $key, $value := .Values.config.data }}
+  {{ $key }}: |
+    {{- $value | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -138,3 +138,23 @@ labels: {}
 
 # Additional annotations
 annotations: {}
+
+# Configuration files
+config:
+  # Enable configmap creation
+  enabled: false
+  # Custom configuration data
+  data: {}
+  # Example nginx configuration
+  # nginx: |
+  #   server {
+  #     listen 80;
+  #     server_name localhost;
+  #     root /usr/share/nginx/html;
+  #     index index.html;
+  #   }
+  # Example mkdocs configuration override
+  # mkdocs: |
+  #   site_name: Custom Site Name
+  #   theme:
+  #     name: material
