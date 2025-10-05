@@ -140,11 +140,64 @@ mkdocs gh-deploy
 The GitHub Actions pipeline includes:
 
 - **Validation**: Documentation build, Helm chart linting with `--validate=false` for Traefik CRDs
-- **Security**: Docker image vulnerability scanning with Trivy
+- **Security**: Docker image vulnerability scanning with Trivy (runs after successful image push)
 - **Deployment**: Automated deployment to staging/production environments
 - **Kubernetes**: Manifest generation with validation disabled for custom CRDs
 
 **Note**: Kubernetes manifest validation is disabled (`--validate=false`) to avoid false positives with Traefik IngressRoute and Middleware CRDs which don't have public schemas available.
+
+#### Security Scanning
+
+The pipeline includes Trivy vulnerability scanning that:
+- Only runs on successful image push (not on PRs)
+- Requires proper GitHub Container Registry authentication
+- Scans for CRITICAL and HIGH severity vulnerabilities only
+- Uploads results to GitHub Security tab
+
+## Troubleshooting
+
+### Common Issues
+
+#### "Unable to find specified image" Error
+If you see Trivy failing with "unable to find the specified image", this usually means:
+1. The image hasn't been pushed to the registry yet
+2. The security scan job ran before the build job completed
+3. Authentication to GitHub Container Registry failed
+
+**Solution**: The pipeline has been updated to run security scanning in a separate job after the build completes.
+
+#### "MANIFEST_UNKNOWN: manifest unknown" Error
+This indicates the Docker image wasn't successfully pushed to the registry:
+1. Check if the build job completed successfully
+2. Verify GitHub Actions has `packages: write` permission
+3. Ensure `GITHUB_TOKEN` has the necessary scopes
+
+#### Kubernetes Validation Warnings
+Warnings like "Failed initializing schema for IngressRoute" are expected and can be ignored:
+- These occur because Traefik CRD schemas aren't available in public schema repositories
+- The pipeline uses `--validate=false` to bypass these false positives
+- Your manifests are still valid and will deploy correctly
+
+### Local Development Issues
+
+#### MkDocs Not Found
+```bash
+pip install -r requirements.txt
+# or
+.\build.ps1 install
+```
+
+#### Docker Build Fails
+```bash
+# Check Docker is running
+docker version
+
+# Clear Docker cache
+docker system prune -a
+
+# Rebuild from scratch
+.\build.ps1 docker-build
+```
 
 ## Configuration
 
