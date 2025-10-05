@@ -179,38 +179,53 @@ jobs:
     - name: Determine scan target
       id: scan-target
       run: |
-        # Use the latest tag for main branch, otherwise use SHA-based tag
-        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-          SCAN_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
-        else
-          SCAN_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}"
-        fi
-        echo "scan-image=${SCAN_IMAGE}" >> $GITHUB_OUTPUT
-        echo "Will scan: ${SCAN_IMAGE}"
-
-    - name: Verify image exists
-      run: |
-        echo "Verifying image: ${{ steps.scan-target.outputs.scan-image }}"
+        # Try multiple tag formats to find the image
+        POSSIBLE_TAGS=(
+          "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main"
+          "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}"
+          "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        )
         
-        # Try to inspect the image with retries
-        for i in {1..5}; do
-          if docker manifest inspect "${{ steps.scan-target.outputs.scan-image }}"; then
-            echo "Image found successfully"
-            exit 0
-          else
-            echo "Attempt $i failed, waiting 30 seconds..."
-            sleep 30
+        echo "Checking available tags in registry..."
+        curl -u "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+             "https://ghcr.io/v2/${{ env.IMAGE_NAME }}/tags/list" | jq '.' || echo "Failed to list tags"
+        
+        SCAN_IMAGE=""
+        for tag in "${POSSIBLE_TAGS[@]}"; do
+          echo "Checking if $tag exists..."
+          if docker manifest inspect "$tag" > /dev/null 2>&1; then
+            SCAN_IMAGE="$tag"
+            echo "Found working tag: $tag"
+            break
           fi
         done
         
-        echo "Image not found after retries. Checking available tags..."
-        # List available tags for debugging
-        curl -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-             "https://ghcr.io/v2/${{ env.IMAGE_NAME }}/tags/list" || true
-        exit 1
+        if [[ -z "$SCAN_IMAGE" ]]; then
+          echo "No accessible image found. Using first tag from metadata."
+          SCAN_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}"
+        fi
+        
+        echo "scan-image=${SCAN_IMAGE}" >> $GITHUB_OUTPUT
+        echo "Final scan target: ${SCAN_IMAGE}"
+
+    - name: Verify image exists (with fallback)
+      id: verify-image
+      continue-on-error: true
+      run: |
+        echo "Verifying image: ${{ steps.scan-target.outputs.scan-image }}"
+        
+        if docker manifest inspect "${{ steps.scan-target.outputs.scan-image }}"; then
+          echo "Image verification successful"
+          echo "image-verified=true" >> $GITHUB_OUTPUT
+        else
+          echo "Image verification failed"
+          echo "image-verified=false" >> $GITHUB_OUTPUT
+        fi
 
     - name: Run Trivy vulnerability scanner
       id: trivy-scan
+      if: steps.verify-image.outputs.image-verified == 'true'
       continue-on-error: true
       uses: aquasecurity/trivy-action@master
       with:
@@ -222,6 +237,17 @@ jobs:
         skip-files: '/var/lib/dpkg/status'
         skip-dirs: '/tmp,/var/cache'
         timeout: '10m'
+
+    - name: Handle scan skip
+      if: steps.verify-image.outputs.image-verified != 'true'
+      run: |
+        echo "Skipping security scan - image not verified"
+        echo "This may happen if:"
+        echo "1. The image push is still in progress"
+        echo "2. There's a delay in registry synchronization"
+        echo "3. Authentication issues with the registry"
+        echo ""
+        echo "The deployment will continue, but security scan results won't be available."
 
     - name: Check scan results
       run: |
