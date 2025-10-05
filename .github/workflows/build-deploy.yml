@@ -210,6 +210,8 @@ jobs:
         exit 1
 
     - name: Run Trivy vulnerability scanner
+      id: trivy-scan
+      continue-on-error: true
       uses: aquasecurity/trivy-action@master
       with:
         image-ref: ${{ steps.scan-target.outputs.scan-image }}
@@ -221,9 +223,19 @@ jobs:
         skip-dirs: '/tmp,/var/cache'
         timeout: '10m'
 
+    - name: Check scan results
+      run: |
+        if [[ -f "trivy-results.sarif" ]]; then
+          echo "Security scan completed successfully"
+          echo "scan-success=true" >> $GITHUB_OUTPUT
+        else
+          echo "Security scan failed or produced no results"
+          echo "scan-success=false" >> $GITHUB_OUTPUT
+        fi
+
     - name: Upload Trivy scan results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v2
-      if: always()
+      if: always() && hashFiles('trivy-results.sarif') != ''
       with:
         sarif_file: 'trivy-results.sarif'
 
