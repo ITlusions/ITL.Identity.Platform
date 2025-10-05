@@ -6,7 +6,7 @@ This repository contains the documentation for the ITL Identity Platform, built 
 
 ### Prerequisites
 
-- Python 3.8 or higher
+- Python 3.8 or higher (Python 3.11+ recommended)
 - Git
 
 ### Setup
@@ -207,6 +207,17 @@ The documentation is configured via `mkdocs.yml`:
 - **Plugins**: Search, Mermaid diagrams
 - **Extensions**: Code highlighting, admonitions, tabs, etc.
 - **Navigation**: Organized by functional areas
+
+### Dependencies
+
+The project uses the latest stable versions:
+
+- **MkDocs**: 1.6+ (documentation generator)
+- **Material for MkDocs**: 9.5+ (theme with advanced features)
+- **Mermaid Plugin**: 1.1+ (diagram support)
+- **PyMdown Extensions**: 10.8+ (enhanced Markdown features)
+
+All dependencies are automatically updated to their latest compatible versions.
 
 ## Contributing
 
