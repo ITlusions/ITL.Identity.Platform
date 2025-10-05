@@ -76,6 +76,55 @@ mkdocs serve
 mkdocs build
 ```
 
+### PowerShell Build Script (Windows)
+
+Use the provided PowerShell script for common tasks:
+
+```powershell
+# Show available commands
+.\build.ps1 help
+
+# Install dependencies
+.\build.ps1 install
+
+# Build and serve locally
+.\build.ps1 serve
+
+# Build documentation
+.\build.ps1 build
+
+# Test documentation
+.\build.ps1 test
+
+# Generate Kubernetes manifests (without validation)
+.\build.ps1 helm-template
+
+# Lint Helm chart
+.\build.ps1 helm-lint
+
+# Run all CI tests locally
+.\build.ps1 ci-test
+```
+
+### Makefile (Linux/macOS)
+
+```bash
+# Show available targets
+make help
+
+# Install dependencies
+make install
+
+# Build and test
+make all
+
+# Generate manifests without validation
+make helm-template
+
+# Validate Kubernetes manifests
+make helm-validate
+```
+
 ### Production Build
 
 ```bash
@@ -85,6 +134,17 @@ mkdocs build --clean
 # Deploy to GitHub Pages (if configured)
 mkdocs gh-deploy
 ```
+
+### CI/CD Pipeline
+
+The GitHub Actions pipeline includes:
+
+- **Validation**: Documentation build, Helm chart linting with `--validate=false` for Traefik CRDs
+- **Security**: Docker image vulnerability scanning with Trivy
+- **Deployment**: Automated deployment to staging/production environments
+- **Kubernetes**: Manifest generation with validation disabled for custom CRDs
+
+**Note**: Kubernetes manifest validation is disabled (`--validate=false`) to avoid false positives with Traefik IngressRoute and Middleware CRDs which don't have public schemas available.
 
 ## Configuration
 

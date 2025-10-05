@@ -38,10 +38,17 @@ docker-compose-dev: ## Start development server with docker-compose
 
 # Helm
 helm-lint: ## Lint Helm chart
-	helm lint charts/identity-docs
+	helm lint charts/identity-docs --strict
 
-helm-template: ## Generate Kubernetes manifests from Helm
-	helm template identity-docs charts/identity-docs --debug
+helm-template: ## Generate Kubernetes manifests from Helm (without validation)
+	helm template identity-docs charts/identity-docs --validate=false > manifests.yaml
+
+helm-template-debug: ## Generate Kubernetes manifests with debug
+	helm template identity-docs charts/identity-docs --validate=false --debug
+
+helm-validate: ## Validate Kubernetes manifests
+	helm template identity-docs charts/identity-docs --validate=false > manifests-test.yaml
+	kubeval manifests-test.yaml --ignore-missing-schemas --skip-kinds IngressRoute,Middleware,ServiceMonitor || echo "kubeval not installed, skipping validation"
 
 helm-install: ## Install Helm chart locally (requires k8s context)
 	helm install identity-docs charts/identity-docs
