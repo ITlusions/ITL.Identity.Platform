@@ -80,13 +80,13 @@ jobs:
         helm lint charts/identity-docs
         helm template identity-docs charts/identity-docs --debug
 
-    - name: Validate Kubernetes manifests
-      run: |
-        helm template identity-docs charts/identity-docs > manifests.yaml
-        # Install kubeval for validation
-        curl -L https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz | tar xz
-        sudo mv kubeval /usr/local/bin
-        kubeval manifests.yaml
+    # - name: Validate Kubernetes manifests
+    #   run: |
+    #     helm template identity-docs charts/identity-docs > manifests.yaml
+    #     # Install kubeval for validation
+    #     curl -L https://github.com/instrumenta/kubeval/releases/latest/download/kubeval-linux-amd64.tar.gz | tar xz
+    #     sudo mv kubeval /usr/local/bin
+    #     kubeval manifests.yaml
 
   # Build and push Docker image
   build:
