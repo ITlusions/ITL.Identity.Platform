@@ -22,7 +22,10 @@ COPY mkdocs.yml .
 RUN mkdocs build --clean --strict
 
 # Production stage with nginx
-FROM nginx:1.25-alpine
+FROM nginx:1.27-alpine
+
+# Update Alpine packages to latest security patches
+RUN apk update && apk upgrade --no-cache
 
 # Create non-root user
 RUN addgroup -g 1000 -S nginx-user && \
