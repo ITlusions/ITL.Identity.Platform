@@ -219,6 +219,71 @@ The project uses the latest stable versions:
 
 All dependencies are automatically updated to their latest compatible versions.
 
+## Branching Strategy and Workflow
+
+This project follows a GitFlow-inspired branching strategy similar to the Keycloak theme workflow:
+
+### Branch Structure
+
+- **`main`**: Production-ready code. Triggers production deployment and creates releases.
+- **`develop`**: Integration branch for features. Triggers staging deployment.
+- **`feature/*`**: Feature development branches. Triggers validation workflows only.
+
+### Workflow
+
+1. **Feature Development**:
+   ```bash
+   # Create feature branch from develop
+   git checkout develop
+   git pull origin develop
+   git checkout -b feature/your-feature-name
+   
+   # Make your changes and push
+   git add .
+   git commit -m "feat: add your feature"
+   git push origin feature/your-feature-name
+   ```
+
+2. **Feature Integration**:
+   - Create PR from `feature/your-feature-name` to `develop`
+   - Feature validation workflow runs automatically
+   - After review and approval, merge to `develop`
+   - Staging deployment triggered automatically
+
+3. **Production Release**:
+   - Create PR from `develop` to `main`
+   - After review and approval, merge to `main`
+   - Production deployment triggered automatically
+
+4. **Version Tagging**:
+   ```bash
+   # Create version tag from main
+   git checkout main
+   git pull origin main
+   git tag -a v1.0.0 -m "Release version 1.0.0"
+   git push origin v1.0.0
+   ```
+
+### CI/CD Behavior
+
+| Branch/Tag Type | Build | Test | Deploy | Artifacts | Release |
+|-----------------|-------|------|--------|-----------|---------|
+| `feature/*` | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `develop` | ✅ | ✅ | Staging | ✅ | ❌ |
+| `main` | ✅ | ✅ | Production | ✅ | ❌ |
+| `v*` tags | ✅ | ✅ | ❌ | ✅ | ✅ |
+| PRs | ✅ | ✅ | ❌ | ❌ | ❌ |
+
+### Artifacts and Releases
+
+- **Feature branches**: Validation only, no artifacts created
+- **Develop branch**: Artifacts uploaded for testing, staging deployment
+- **Main branch**: Production deployment, artifacts for production use
+- **Version tags**: GitHub releases created with:
+  - Documentation site archive (`identity-docs-site-v*.tar.gz`)
+  - Helm chart package (`identity-docs-v*.tgz`)
+  - Docker images with semantic version tags
+
 ## Contributing
 
 ### Adding New Content
