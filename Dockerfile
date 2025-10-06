@@ -1,38 +1,28 @@
-# Multi-stage build for MkDocs documentation
-FROM python:3.11-slim as builder
-
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Copy documentation source
-COPY docs/ docs/
-COPY mkdocs.yml .
-
-# Build the documentation
-RUN mkdocs build --clean --strict
-
-# Production stage with nginx
+# Single-stage build for MkDocs documentation with nginx
 FROM nginx:1.27-alpine
 
 # Update Alpine packages to latest security patches
-RUN apk update && apk upgrade --no-cache
+RUN apk update && apk upgrade --no-cache && \
+    apk add --no-cache python3 py3-pip git
 
 # Create non-root user
 RUN addgroup -g 1000 -S nginx-user && \
     adduser -u 1000 -D -S -G nginx-user nginx-user
 
-# Copy built documentation
-COPY --from=builder /app/site /usr/share/nginx/html
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir -r requirements.txt
+
+# Copy documentation source
+COPY docs/ docs/
+COPY mkdocs.yml .
+
+# Build the documentation directly to nginx html directory
+RUN mkdocs build --clean --strict --site-dir /usr/share/nginx/html
 
 # Create necessary directories with proper permissions
 RUN mkdir -p /var/cache/nginx /var/run /var/log/nginx && \
@@ -99,10 +89,19 @@ RUN sed -i 's/^user  nginx;/user  nginx-user;/' /etc/nginx/nginx.conf && \
     sed -i 's|/var/log/nginx/access.log|/tmp/access.log|' /etc/nginx/nginx.conf && \
     sed -i 's|/var/log/nginx/error.log|/tmp/error.log|' /etc/nginx/nginx.conf
 
+# Clean up build dependencies to reduce image size
+RUN pip3 uninstall -y pip && \
+    apk del git py3-pip && \
+    rm -rf /app /root/.cache /tmp/* /var/cache/apk/*
+
 # Switch to non-root user
 USER nginx-user
 
 EXPOSE 80
+
+# Add healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost/health || exit 1
 
 # Use nginx-user to run nginx
 CMD ["nginx", "-g", "daemon off;"]
