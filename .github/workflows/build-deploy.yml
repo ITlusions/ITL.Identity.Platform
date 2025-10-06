@@ -430,14 +430,28 @@ jobs:
           exit 0
         fi
         
+        echo "📧 Preparing Teams notification..."
+        echo "Status: ${{ needs.deploy.result }}"
+        echo "Actor: ${{ github.actor }}"
+        echo "Ref: ${{ github.ref_name }}"
+        
         # Determine status and color
         STATUS="${{ needs.deploy.result }}"
         case "$STATUS" in
-          "success") COLOR="Good" ;;
-          "failure") COLOR="Attention" ;;
-          "cancelled") COLOR="Warning" ;;
-          *) COLOR="Warning" ;;
+          "success") COLOR="Good"; EMOJI="✅" ;;
+          "failure") COLOR="Attention"; EMOJI="❌" ;;
+          "cancelled") COLOR="Warning"; EMOJI="⚠️" ;;
+          *) COLOR="Warning"; EMOJI="⚠️" ;;
         esac
+        
+        # Truncate commit SHA for display
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+        
+        # Truncate webhook URL for logging (show only first 50 chars)
+        WEBHOOK_PREVIEW=$(echo "${{ secrets.TEAMS_WEBHOOK }}" | cut -c1-50)
+        echo "🔗 Webhook URL: ${WEBHOOK_PREVIEW}..."
+        
+        echo "🎨 Message color: $COLOR ($EMOJI)"
         
         # Create Teams message payload
         cat > teams_payload.json << EOF
@@ -447,13 +461,13 @@ jobs:
           "themeColor": "$COLOR",
           "summary": "Deployment Status for identity-docs",
           "sections": [{
-            "activityTitle": "🚀 Identity Platform Deployment",
+            "activityTitle": "$EMOJI Identity Platform Deployment",
             "activitySubtitle": "Build and Deploy Documentation",
             "facts": [
               {"name": "Version", "value": "${{ github.ref_name }}"},
-              {"name": "Commit", "value": "${{ github.sha }}"},
+              {"name": "Commit", "value": "$SHORT_SHA"},
               {"name": "Actor", "value": "${{ github.actor }}"},
-              {"name": "Status", "value": "$STATUS"},
+              {"name": "Status", "value": "$STATUS ($EMOJI)"},
               {"name": "Workflow", "value": "${{ github.workflow }}"}
             ],
             "markdown": true
@@ -469,9 +483,25 @@ jobs:
         }
         EOF
         
+        echo "📝 Teams message payload created"
+        echo "📄 Payload preview:"
+        jq '.' teams_payload.json || cat teams_payload.json
+        
         # Send to Teams
-        curl -H "Content-Type: application/json" \
+        echo "📤 Sending notification to Teams..."
+        RESPONSE=$(curl -s -w "\n%{http_code}" -H "Content-Type: application/json" \
              -d @teams_payload.json \
-             "${{ secrets.TEAMS_WEBHOOK }}"
+             "${{ secrets.TEAMS_WEBHOOK }}")
+        
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
+        
+        echo "📊 HTTP Response Code: $HTTP_CODE"
+        if [ "$HTTP_CODE" = "200" ]; then
+          echo "✅ Teams notification sent successfully!"
+        else
+          echo "❌ Teams notification failed!"
+          echo "Response: $RESPONSE_BODY"
+        fi
       env:
         TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
