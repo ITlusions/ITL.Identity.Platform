@@ -248,41 +248,48 @@ This project follows a GitFlow-inspired branching strategy similar to the Keyclo
    - Create PR from `feature/your-feature-name` to `develop`
    - Feature validation workflow runs automatically
    - After review and approval, merge to `develop`
-   - Staging deployment triggered automatically
+   - No deployment (develop is for integration only)
 
-3. **Production Release**:
+3. **Release Preparation**:
    - Create PR from `develop` to `main`
    - After review and approval, merge to `main`
-   - Production deployment triggered automatically
+   - No deployment (main is for release preparation only)
 
-4. **Version Tagging**:
+4. **Production Deployment**:
    ```bash
-   # Create version tag from main
+   # Create version tag from main to trigger deployment
    git checkout main
    git pull origin main
    git tag -a v1.0.0 -m "Release version 1.0.0"
    git push origin v1.0.0
    ```
+   - Production deployment triggered automatically
+   - Docker images built and pushed with version tags
+   - GitHub release created with artifacts
 
 ### CI/CD Behavior
 
 | Branch/Tag Type | Build | Test | Deploy | Artifacts | Release |
 |-----------------|-------|------|--------|-----------|---------|
 | `feature/*` | ✅ | ✅ | ❌ | ❌ | ❌ |
-| `develop` | ✅ | ✅ | Staging | ✅ | ❌ |
-| `main` | ✅ | ✅ | Production | ✅ | ❌ |
-| `v*` tags | ✅ | ✅ | ❌ | ✅ | ✅ |
+| `develop` | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `main` | ✅ | ✅ | ❌ | ❌ | ❌ |
+| `v*` tags | ✅ | ✅ | ✅ | ✅ | ✅ |
 | PRs | ✅ | ✅ | ❌ | ❌ | ❌ |
+
+**Note**: Only version tags (`v*`) trigger deployments. This ensures controlled releases and prevents accidental deployments from development branches.
 
 ### Artifacts and Releases
 
 - **Feature branches**: Validation only, no artifacts created
-- **Develop branch**: Artifacts uploaded for testing, staging deployment
-- **Main branch**: Production deployment, artifacts for production use
-- **Version tags**: GitHub releases created with:
-  - Documentation site archive (`identity-docs-site-v*.tar.gz`)
-  - Helm chart package (`identity-docs-v*.tgz`)
+- **Develop branch**: Validation only, no artifacts created  
+- **Main branch**: Validation only, no artifacts created
+- **Version tags**: Complete deployment with:
   - Docker images with semantic version tags
+  - GitHub releases created with:
+    - Documentation site archive (`identity-docs-site-v*.tar.gz`)
+    - Helm chart package (`identity-docs-v*.tgz`)
+  - Production deployment to Kubernetes cluster
 
 ## Contributing
 
