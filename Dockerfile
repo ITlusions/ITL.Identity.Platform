@@ -14,8 +14,8 @@ WORKDIR /app
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir --upgrade pip --break-system-packages && \
+    pip3 install --no-cache-dir -r requirements.txt --break-system-packages
 
 # Copy documentation source
 COPY docs/ docs/
@@ -90,7 +90,7 @@ RUN sed -i 's/^user  nginx;/user  nginx-user;/' /etc/nginx/nginx.conf && \
     sed -i 's|/var/log/nginx/error.log|/tmp/error.log|' /etc/nginx/nginx.conf
 
 # Clean up build dependencies to reduce image size
-RUN pip3 uninstall -y pip && \
+RUN pip3 uninstall -y pip --break-system-packages || true && \
     apk del git py3-pip && \
     rm -rf /app /root/.cache /tmp/* /var/cache/apk/*
 
