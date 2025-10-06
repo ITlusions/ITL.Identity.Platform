@@ -501,29 +501,50 @@ jobs:
         {
           "@type": "MessageCard",
           "@context": "http://schema.org/extensions",
+          "summary": "ITL Identity Platform Deployment",
           "themeColor": "$COLOR",
-          "summary": "Deployment Status for identity-docs",
-          "sections": [{
-            "activityTitle": "$EMOJI Identity Platform Deployment",
-            "activitySubtitle": "Build and Deploy Documentation",
-            "facts": [
-              {"name": "Version", "value": "${{ github.ref_name }}"},
-              {"name": "Commit", "value": "$SHORT_SHA"},
-              {"name": "Actor", "value": "${{ github.actor }}"},
-              {"name": "Trigger", "value": "$TRIGGER"},
-              {"name": "Status", "value": "$STATUS ($EMOJI)"},
-              {"name": "Workflow", "value": "${{ github.workflow }}"}
-            ],
-            "markdown": true
-          }],
-          "potentialAction": [{
-            "@type": "OpenUri",
-            "name": "View Workflow",
-            "targets": [{
-              "os": "default",
-              "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            }]
-          }]
+          "sections": [
+            {
+              "activityTitle": "ITL Identity Platform",
+              "activitySubtitle": "Build and Deploy Documentation",
+              "activityImage": "https://github.com/ITlusions.png",
+              "facts": [
+                {
+                  "name": "Status:",
+                  "value": "$STATUS $EMOJI"
+                },
+                {
+                  "name": "Version:",
+                  "value": "${{ github.ref_name }}"
+                },
+                {
+                  "name": "Commit:",
+                  "value": "$SHORT_SHA"
+                },
+                {
+                  "name": "Trigger:",
+                  "value": "$TRIGGER"
+                },
+                {
+                  "name": "Actor:",
+                  "value": "${{ github.actor }}"
+                }
+              ],
+              "markdown": true
+            }
+          ],
+          "potentialAction": [
+            {
+              "@type": "OpenUri",
+              "name": "View Workflow",
+              "targets": [
+                {
+                  "os": "default",
+                  "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                }
+              ]
+            }
+          ]
         }
         EOF
         
