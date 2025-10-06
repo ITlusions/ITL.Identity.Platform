@@ -424,6 +424,12 @@ jobs:
     - name: Notify Microsoft Teams
       shell: bash
       run: |
+        # Check if Teams webhook is configured
+        if [ -z "${{ secrets.TEAMS_WEBHOOK }}" ]; then
+          echo "🔕 Teams webhook not configured, skipping notification"
+          exit 0
+        fi
+        
         # Determine status and color
         STATUS="${{ needs.deploy.result }}"
         case "$STATUS" in
