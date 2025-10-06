@@ -419,17 +419,53 @@ jobs:
   notify-teams:
     needs: [deploy]
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && secrets.TEAMS_WEBHOOK
     steps:
     - name: Notify Microsoft Teams
-      uses: skitionek/notify-microsoft-teams@v1
-      with:
-        webhook_url: ${{ secrets.TEAMS_WEBHOOK }}
-        job_status: ${{ needs.deploy.result }}
-        message: |
-          Deployment status for identity-docs:
-          - Version: ${{ github.ref_name }}
-          - Commit: ${{ github.sha }}
-          - Actor: ${{ github.actor }}
-          - Status: ${{ needs.deploy.result }}
-          - Workflow: ${{ github.workflow }}
+      shell: bash
+      run: |
+        # Determine status and color
+        STATUS="${{ needs.deploy.result }}"
+        case "$STATUS" in
+          "success") COLOR="Good" ;;
+          "failure") COLOR="Attention" ;;
+          "cancelled") COLOR="Warning" ;;
+          *) COLOR="Warning" ;;
+        esac
+        
+        # Create Teams message payload
+        cat > teams_payload.json << EOF
+        {
+          "@type": "MessageCard",
+          "@context": "http://schema.org/extensions",
+          "themeColor": "$COLOR",
+          "summary": "Deployment Status for identity-docs",
+          "sections": [{
+            "activityTitle": "🚀 Identity Platform Deployment",
+            "activitySubtitle": "Build and Deploy Documentation",
+            "facts": [
+              {"name": "Version", "value": "${{ github.ref_name }}"},
+              {"name": "Commit", "value": "${{ github.sha }}"},
+              {"name": "Actor", "value": "${{ github.actor }}"},
+              {"name": "Status", "value": "$STATUS"},
+              {"name": "Workflow", "value": "${{ github.workflow }}"}
+            ],
+            "markdown": true
+          }],
+          "potentialAction": [{
+            "@type": "OpenUri",
+            "name": "View Workflow",
+            "targets": [{
+              "os": "default",
+              "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }]
+          }]
+        }
+        EOF
+        
+        # Send to Teams
+        curl -H "Content-Type: application/json" \
+             -d @teams_payload.json \
+             "${{ secrets.TEAMS_WEBHOOK }}"
+      env:
+        TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
