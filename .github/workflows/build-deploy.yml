@@ -419,9 +419,10 @@ jobs:
   notify-teams:
     needs: [deploy]
     runs-on: ubuntu-latest
-    if: always() && secrets.TEAMS_WEBHOOK
+    if: always()
     steps:
     - name: Notify Microsoft Teams
+      if: ${{ secrets.TEAMS_WEBHOOK != '' }}
       shell: bash
       run: |
         # Determine status and color
