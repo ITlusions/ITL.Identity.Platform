@@ -416,18 +416,20 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # # Notify deployment status
-  # notify:
-  #   needs: [deploy-production]
-  #   runs-on: ubuntu-latest
-  #   if: always()
-    
-  #   steps:
-  #   - name: Notify Slack
-  #     if: always()
-  #     uses: 8398a7/action-slack@v3
-  #     with:
-  #       status: ${{ job.status }}
-  #       channel: '#platform-deployments'
-  #       webhook_url: ${{ secrets.SLACK_WEBHOOK }}
-  #       fields: repo,message,commit,author,action,eventName,ref,workflow
+  notify-teams:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Notify Microsoft Teams
+      uses: skitionek/notify-microsoft-teams@v1
+      with:
+        webhook_url: ${{ secrets.TEAMS_WEBHOOK }}
+        job_status: ${{ needs.deploy.result }}
+        message: |
+          Deployment status for identity-docs:
+          - Version: ${{ github.ref_name }}
+          - Commit: ${{ github.sha }}
+          - Actor: ${{ github.actor }}
+          - Status: ${{ needs.deploy.result }}
+          - Workflow: ${{ github.workflow }}
