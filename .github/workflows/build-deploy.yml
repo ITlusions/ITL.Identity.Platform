@@ -178,6 +178,7 @@ jobs:
         mkdocs build
 
     - name: Upload documentation artifacts
+      if: startsWith(github.ref, 'refs/tags/v')
       uses: actions/upload-artifact@v4
       with:
         name: identity-docs-site
@@ -187,6 +188,7 @@ jobs:
         overwrite: true
 
     - name: Upload Helm chart artifacts
+      if: startsWith(github.ref, 'refs/tags/v')
       uses: actions/upload-artifact@v4
       with:
         name: identity-docs-helm
@@ -194,25 +196,6 @@ jobs:
         if-no-files-found: error
         retention-days: 30
         overwrite: true
-
-    - name: Package and upload release artifacts
-      if: startsWith(github.ref, 'refs/tags/v')
-      run: |
-        # Create release package
-        mkdir -p release-artifacts
-        
-        # Create documentation archive
-        tar -czf release-artifacts/identity-docs-site-${{ github.ref_name }}.tar.gz -C site .
-        
-        # Package Helm chart
-        helm package charts/identity-docs --destination release-artifacts --version ${{ github.ref_name }}
-        
-        # Upload to GitHub release
-        for file in release-artifacts/*; do
-          gh release upload "${{ github.ref_name }}" "$file"
-        done
-      env:
-        GH_TOKEN: ${{ github.token }}
 
   # Security scan - separate job to run after image is pushed
   security-scan:
@@ -425,7 +408,35 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Build documentation site
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        mkdocs build
+
+    - name: Create release artifacts
+      run: |
+        # Create release package directory
+        mkdir -p release-artifacts
+        
+        # Create documentation archive
+        tar -czf release-artifacts/identity-docs-site-${{ github.ref_name }}.tar.gz -C site .
+        
+        # Package Helm chart
+        helm package charts/identity-docs --destination release-artifacts --version ${{ github.ref_name }}
+
     - name: Create GitHub Release
+      id: create_release
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -445,7 +456,17 @@ jobs:
           **Changes:**
           See commit history for detailed changes.
         draft: false
-        prerelease: false
+        prerelease: ${{ contains(github.ref_name, '-alpha') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-dev') }}
+
+    - name: Upload release artifacts
+      run: |
+        # Upload all artifacts to the release
+        for file in release-artifacts/*; do
+          echo "Uploading: $file"
+          gh release upload "${{ github.ref_name }}" "$file"
+        done
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # # Notify deployment status
   # notify:
