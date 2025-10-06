@@ -487,17 +487,44 @@ jobs:
         echo "🔗 Webhook URL: ${WEBHOOK_PREVIEW}..."
         
         # Validate webhook URL format
-        if [[ "${{ secrets.TEAMS_WEBHOOK }}" == *"outlook.office.com/webhook"* ]] || [[ "${{ secrets.TEAMS_WEBHOOK }}" == *"office.com/webhookb2"* ]]; then
-          echo "✅ Webhook URL format looks valid"
+        if [[ "${{ secrets.TEAMS_WEBHOOK }}" == *"outlook.office.com/webhook"* ]]; then
+          echo "✅ Direct Teams webhook detected"
+          MESSAGE_TYPE="teams"
+        elif [[ "${{ secrets.TEAMS_WEBHOOK }}" == *"powerplatform.com"* ]] && [[ "${{ secrets.TEAMS_WEBHOOK }}" == *"powerautomate"* ]]; then
+          echo "✅ Power Automate workflow webhook detected"
+          MESSAGE_TYPE="powerautomate"
         else
           echo "⚠️  Warning: Webhook URL format may be incorrect"
-          echo "Expected: https://outlook.office.com/webhook/... or https://xxx.office.com/webhookb2/..."
+          echo "Expected: Teams webhook or Power Automate workflow URL"
+          MESSAGE_TYPE="unknown"
         fi
         
         echo "🎨 Message color: $COLOR ($EMOJI)"
         
-        # Create Teams message payload
-        cat > teams_payload.json << EOF
+        # Create appropriate message payload based on webhook type
+        if [ "$MESSAGE_TYPE" = "powerautomate" ]; then
+          echo "📝 Creating Power Automate payload..."
+          # Power Automate expects simpler JSON structure
+          cat > teams_payload.json << EOF
+        {
+          "title": "ITL Identity Platform Deployment",
+          "status": "$STATUS",
+          "emoji": "$EMOJI",
+          "color": "$COLOR",
+          "version": "${{ github.ref_name }}",
+          "commit": "$SHORT_SHA",
+          "actor": "${{ github.actor }}",
+          "trigger": "$TRIGGER",
+          "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          "repository": "${{ github.repository }}",
+          "event": "${{ github.event_name }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        EOF
+        else
+          echo "📝 Creating Teams MessageCard payload..."
+          # Direct Teams webhook expects MessageCard format
+          cat > teams_payload.json << EOF
         {
           "@type": "MessageCard",
           "@context": "http://schema.org/extensions",
@@ -547,8 +574,9 @@ jobs:
           ]
         }
         EOF
+        fi
         
-        echo "📝 Teams message payload created"
+        echo "📝 Message payload created for $MESSAGE_TYPE"
         echo "📄 Payload preview:"
         jq '.' teams_payload.json || cat teams_payload.json
         
