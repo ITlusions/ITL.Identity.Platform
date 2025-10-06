@@ -129,6 +129,7 @@ nav:
     - Deployment: operations/deployment.md
     - Monitoring: operations/monitoring.md
     - OIDC Authentication: operations/oidc-authentication.md
+    - Versioning Guide: operations/versioning-guide.md
   - Legacy Documentation:
     - Architecture Navigation Guide: managed-identities-pim-architecture.md
   - Appendices:
