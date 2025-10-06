@@ -1,6 +1,26 @@
 name: Build and Deploy Documentation
 
 on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: false
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      force_rebuild:
+        description: 'Force rebuild Docker image (ignore cache)'
+        required: false
+        default: false
+        type: boolean
+      skip_tests:
+        description: 'Skip documentation tests'
+        required: false
+        default: false
+        type: boolean
   push:
     branches: 
       - main
@@ -32,6 +52,7 @@ jobs:
   # Test and validate documentation
   test:
     runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -107,8 +128,9 @@ jobs:
 
   # Build and push Docker image
   build:
-    needs: [test, helm-lint]
+    needs: [helm-lint]
     runs-on: ubuntu-latest
+    if: ${{ always() && (needs.helm-lint.result == 'success') && (!inputs.skip_tests || needs.test.result == 'success' || needs.test.result == 'skipped') }}
     permissions:
       contents: read
       packages: write
@@ -168,9 +190,10 @@ jobs:
         push: ${{ startsWith(github.ref, 'refs/tags/v') }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
+        cache-from: ${{ inputs.force_rebuild && 'type=registry' || 'type=gha' }}
         cache-to: type=gha,mode=max
         platforms: linux/amd64,linux/arm64
+        no-cache: ${{ inputs.force_rebuild }}
 
     - name: Build documentation site
       if: startsWith(github.ref, 'refs/tags/v')
@@ -434,6 +457,18 @@ jobs:
         echo "Status: ${{ needs.deploy.result }}"
         echo "Actor: ${{ github.actor }}"
         echo "Ref: ${{ github.ref_name }}"
+        echo "Event: ${{ github.event_name }}"
+        
+        # Determine trigger source
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          TRIGGER="Manual (by ${{ github.actor }})"
+          if [ "${{ inputs.environment }}" != "" ]; then
+            TRIGGER="$TRIGGER → ${{ inputs.environment }}"
+          fi
+        else
+          TRIGGER="Automatic (${{ github.event_name }})"
+        fi
+        echo "Trigger: $TRIGGER"
         
         # Determine status and color
         STATUS="${{ needs.deploy.result }}"
@@ -467,6 +502,7 @@ jobs:
               {"name": "Version", "value": "${{ github.ref_name }}"},
               {"name": "Commit", "value": "$SHORT_SHA"},
               {"name": "Actor", "value": "${{ github.actor }}"},
+              {"name": "Trigger", "value": "$TRIGGER"},
               {"name": "Status", "value": "$STATUS ($EMOJI)"},
               {"name": "Workflow", "value": "${{ github.workflow }}"}
             ],
