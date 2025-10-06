@@ -1,4 +1,4 @@
-# Single-stage build for MkDocs documentation with nginx
+# Single-stage build for MkDocs documentation with nginx 
 FROM nginx:1.27-alpine
 
 # Update Alpine packages to latest security patches
