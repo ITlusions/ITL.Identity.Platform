@@ -486,6 +486,14 @@ jobs:
         WEBHOOK_PREVIEW=$(echo "${{ secrets.TEAMS_WEBHOOK }}" | cut -c1-50)
         echo "🔗 Webhook URL: ${WEBHOOK_PREVIEW}..."
         
+        # Validate webhook URL format
+        if [[ "${{ secrets.TEAMS_WEBHOOK }}" == *"outlook.office.com/webhook"* ]] || [[ "${{ secrets.TEAMS_WEBHOOK }}" == *"office.com/webhookb2"* ]]; then
+          echo "✅ Webhook URL format looks valid"
+        else
+          echo "⚠️  Warning: Webhook URL format may be incorrect"
+          echo "Expected: https://outlook.office.com/webhook/... or https://xxx.office.com/webhookb2/..."
+        fi
+        
         echo "🎨 Message color: $COLOR ($EMOJI)"
         
         # Create Teams message payload
@@ -533,11 +541,21 @@ jobs:
         RESPONSE_BODY=$(echo "$RESPONSE" | head -n -1)
         
         echo "📊 HTTP Response Code: $HTTP_CODE"
-        if [ "$HTTP_CODE" = "200" ]; then
+        if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "202" ]; then
           echo "✅ Teams notification sent successfully!"
+          if [ "$HTTP_CODE" = "202" ]; then
+            echo "ℹ️  Message accepted for async processing"
+          fi
+          echo ""
+          echo "🔍 Troubleshooting if no message appears in Teams:"
+          echo "1. Check if the webhook connector is still active in Teams"
+          echo "2. Verify the Teams channel where the connector was configured"
+          echo "3. Check if the connector has been removed or disabled"
+          echo "4. Try sending a test message to the webhook URL manually"
         else
           echo "❌ Teams notification failed!"
           echo "Response: $RESPONSE_BODY"
+          # Don't exit with error for notification failures
         fi
       env:
         TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
