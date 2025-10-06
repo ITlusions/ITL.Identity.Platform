@@ -257,39 +257,48 @@ This project follows a GitFlow-inspired branching strategy similar to the Keyclo
 
 4. **Production Deployment**:
    ```bash
-   # Create version tag from main to trigger deployment
+   # Create version tag from main to trigger pipeline
    git checkout main
    git pull origin main
    git tag -a v1.0.0 -m "Release version 1.0.0"
    git push origin v1.0.0
    ```
-   - Production deployment triggered automatically
-   - Docker images built and pushed with version tags
-   - GitHub release created with artifacts
+   
+   Then **manually create the GitHub release**:
+   1. Go to [GitHub Releases](https://github.com/ITlusions/ITL.identity.platform/releases)
+   2. Click "Create a new release"
+   3. Select tag: `v1.0.0`
+   4. Add title: "Identity Platform Documentation v1.0.0"
+   5. Write release notes
+   6. Mark as pre-release if it's alpha/beta/rc/dev
+   7. Publish release
+   
+   The pipeline will automatically upload artifacts to your release.
 
 ### CI/CD Behavior
 
-| Branch/Tag Type | Build | Test | Deploy | Artifacts | Release |
-|-----------------|-------|------|--------|-----------|---------|
+| Branch/Tag Type | Build | Test | Deploy | Artifacts | Manual Release Required |
+|-----------------|-------|------|--------|-----------|------------------------|
 | `feature/*` | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `develop` | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `main` | ✅ | ✅ | ❌ | ❌ | ❌ |
 | `v*` tags | ✅ | ✅ | ✅ | ✅ | ✅ |
 | PRs | ✅ | ✅ | ❌ | ❌ | ❌ |
 
-**Note**: Only version tags (`v*`) trigger deployments. This ensures controlled releases and prevents accidental deployments from development branches.
+**Note**: Version tags (`v*`) trigger deployment and artifact upload to **manually created** GitHub releases.
 
 ### Artifacts and Releases
 
 - **Feature branches**: Validation only, no artifacts created
 - **Develop branch**: Validation only, no artifacts created  
 - **Main branch**: Validation only, no artifacts created
-- **Version tags**: Complete deployment with:
+- **Version tags**: Artifacts uploaded to manually created releases:
   - Docker images with semantic version tags
-  - GitHub releases created with:
-    - Documentation site archive (`identity-docs-site-v*.tar.gz`)
-    - Helm chart package (`identity-docs-v*.tgz`)
+  - Documentation site archive (`identity-docs-site-v*.tar.gz`)
+  - Helm chart package (`identity-docs-v*.tgz`)
   - Production deployment to Kubernetes cluster
+
+**Workflow**: Create tag → Create release manually → Pipeline uploads artifacts automatically
 
 ## Contributing
 

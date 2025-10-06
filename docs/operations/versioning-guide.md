@@ -48,15 +48,19 @@ This guide explains how to create development builds with proper semantic versio
 ```powershell
 # Early development build
 .\release.ps1 -Version v1.2.0-alpha.1 -Message "Add new authentication features"
+# Then manually create release at: https://github.com/ITlusions/ITL.identity.platform/releases
 
 # Feature complete, ready for testing
 .\release.ps1 -Version v1.2.0-beta.1 -Message "Feature complete - OIDC integration"
+# Then manually create release and mark as pre-release
 
 # Release candidate
 .\release.ps1 -Version v1.2.0-rc.1 -Message "Final testing before release"
+# Then manually create release and mark as pre-release
 
 # Development snapshot
 .\release.ps1 -Version v1.2.0-dev.1 -FromBranch feature/new-ui
+# Then manually create release and mark as pre-release
 ```
 
 ### **Create Stable Releases**
@@ -64,12 +68,15 @@ This guide explains how to create development builds with proper semantic versio
 ```powershell
 # Major release
 .\release.ps1 -Version v2.0.0 -Message "Major release with breaking changes"
+# Then manually create release at: https://github.com/ITlusions/ITL.identity.platform/releases
 
 # Minor release (new features)
 .\release.ps1 -Version v1.3.0 -Message "Add new monitoring features"
+# Then manually create release
 
 # Patch release (bug fixes)
 .\release.ps1 -Version v1.2.1 -Message "Fix authentication bug"
+# Then manually create release
 ```
 
 ## 📊 **Version Progression Example**
@@ -87,7 +94,38 @@ v1.1.0              # Previous stable release
 └── v1.2.0          # Stable release
 ```
 
-## 🔄 **Deployment Strategy**
+## � **Release Process**
+
+### **Step 1: Create Version Tag**
+```powershell
+# Use the release script to create and push the tag
+.\release.ps1 -Version v1.2.0 -Message "Your release description"
+```
+
+### **Step 2: Create GitHub Release Manually**
+1. **Go to Releases**: Visit [GitHub Releases](https://github.com/ITlusions/ITL.identity.platform/releases)
+2. **Click "Create a new release"**
+3. **Select your tag**: Choose the tag you just created (e.g., `v1.2.0`)
+4. **Add release details**:
+   - **Title**: `Identity Platform Documentation v1.2.0`
+   - **Description**: Add your release notes, feature list, breaking changes, etc.
+   - **Pre-release**: Check this for alpha, beta, rc, or dev versions
+5. **Publish release**
+
+### **Step 3: Automatic Pipeline**
+Once you publish the release, GitHub Actions will automatically:
+- ✅ Build Docker images
+- ✅ Run security scans  
+- ✅ Create documentation archive
+- ✅ Package Helm chart
+- ✅ Upload all artifacts to your release
+
+### **Step 4: Verify Artifacts**
+Check that these files were uploaded to your release:
+- `identity-docs-site-v1.2.0.tar.gz` - Documentation website
+- `identity-docs-v1.2.0.tgz` - Helm chart package
+
+## �🔄 **Deployment Strategy**
 
 | Version Type | Environment | Auto Deploy | Manual Review |
 |--------------|-------------|-------------|---------------|

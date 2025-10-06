@@ -392,38 +392,27 @@ jobs:
         # Package Helm chart
         helm package charts/identity-docs --destination release-artifacts --version ${{ github.ref_name }}
 
-    - name: Create GitHub Release and Upload Artifacts
+    - name: Upload Artifacts to Existing Release
       run: |
-        # Create the release and upload artifacts in one step
-        echo "Creating release ${{ github.ref_name }}..."
+        # Upload artifacts to the existing release
+        echo "Uploading artifacts to existing release ${{ github.ref_name }}..."
         
-        # Determine if this is a pre-release
-        PRERELEASE_FLAG=""
-        if [[ "${{ github.ref_name }}" == *"-alpha"* ]] || [[ "${{ github.ref_name }}" == *"-beta"* ]] || [[ "${{ github.ref_name }}" == *"-rc"* ]] || [[ "${{ github.ref_name }}" == *"-dev"* ]]; then
-          PRERELEASE_FLAG="--prerelease"
+        # Check if release exists
+        if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+          echo "✅ Release ${{ github.ref_name }} exists"
+          
+          # Upload all artifacts to the existing release
+          for file in release-artifacts/*; do
+            echo "📦 Uploading: $(basename "$file")"
+            gh release upload "${{ github.ref_name }}" "$file" --clobber
+          done
+          
+          echo "✅ All artifacts uploaded successfully"
+        else
+          echo "❌ Release ${{ github.ref_name }} does not exist"
+          echo "Please create the release manually first, then re-run the workflow"
+          exit 1
         fi
-        
-        # Create release notes
-        cat > release_notes.md << 'EOF'
-        Release of Identity Platform documentation ${{ github.ref_name }}
-
-        **Docker Image:** 
-        `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}`
-
-        **Artifacts:**
-        - Documentation site archive
-        - Helm chart package
-
-        **Changes:**
-        See commit history for detailed changes.
-        EOF
-        
-        # Create release with artifacts
-        gh release create "${{ github.ref_name }}" \
-          --title "Identity Platform Documentation ${{ github.ref_name }}" \
-          --notes-file release_notes.md \
-          $PRERELEASE_FLAG \
-          release-artifacts/*
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

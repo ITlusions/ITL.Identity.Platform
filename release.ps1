@@ -190,22 +190,35 @@ try {
     Write-Host "🎉 $releaseType release $Version created successfully!" -ForegroundColor Green
     Write-Host ""
     Write-Host "📋 What happens next:" -ForegroundColor Yellow
+    Write-Host "   • Create the GitHub release manually with:" -ForegroundColor White
+    Write-Host "     - Tag: $Version" -ForegroundColor Gray
+    Write-Host "     - Title: Identity Platform Documentation $Version" -ForegroundColor Gray
+    Write-Host "     - Description: Your release notes" -ForegroundColor Gray
+    if ($isPreRelease) {
+        Write-Host "     - Mark as pre-release: ✅" -ForegroundColor Gray
+    } else {
+        Write-Host "     - Mark as pre-release: ❌" -ForegroundColor Gray
+    }
+    Write-Host ""
     Write-Host "   • GitHub Actions will automatically:" -ForegroundColor White
     Write-Host "     - Build Docker image with tag: $Version" -ForegroundColor Gray
     Write-Host "     - Run security scans" -ForegroundColor Gray
-    if ($isPreRelease) {
-        Write-Host "     - Deploy to staging/testing environment" -ForegroundColor Gray
-        Write-Host "     - Create GitHub pre-release" -ForegroundColor Gray
-    } else {
-        Write-Host "     - Deploy to production" -ForegroundColor Gray
-        Write-Host "     - Create GitHub stable release" -ForegroundColor Gray
-    }
+    Write-Host "     - Upload artifacts to your release:" -ForegroundColor Gray
+    Write-Host "       * Documentation site archive" -ForegroundColor Gray
+    Write-Host "       * Helm chart package" -ForegroundColor Gray
     Write-Host ""
     Write-Host "🔗 Monitor progress at:" -ForegroundColor Yellow
     Write-Host "   https://github.com/ITlusions/ITL.identity.platform/actions" -ForegroundColor Blue
     Write-Host ""
     Write-Host "📦 Docker image will be available at:" -ForegroundColor Yellow
     Write-Host "   ghcr.io/itlusions/identity-docs:$Version" -ForegroundColor Blue
+    Write-Host ""
+    Write-Host "📝 Manual Steps:" -ForegroundColor Yellow
+    Write-Host "   1. Go to: https://github.com/ITlusions/ITL.identity.platform/releases" -ForegroundColor Blue
+    Write-Host "   2. Click 'Create a new release'" -ForegroundColor Gray
+    Write-Host "   3. Select tag: $Version" -ForegroundColor Gray
+    Write-Host "   4. Add release notes and publish" -ForegroundColor Gray
+    Write-Host "   5. Artifacts will be uploaded automatically" -ForegroundColor Gray
 
 } catch {
     Write-Error "Failed to create release: $($_.Exception.Message)"
