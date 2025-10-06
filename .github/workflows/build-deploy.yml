@@ -2,7 +2,12 @@ name: Build and Deploy Documentation
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: 
+      - main
+      - develop
+      - 'feature/**'
+    tags:
+      - "v*"
     paths: 
       - 'docs/**'
       - 'mkdocs.yml'
@@ -11,7 +16,7 @@ on:
       - 'charts/**'
       - '.github/workflows/**'
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
@@ -118,6 +123,16 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
 
@@ -137,6 +152,9 @@ jobs:
         tags: |
           type=ref,event=branch
           type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
           type=sha,prefix={{branch}}-
           type=raw,value=latest,enable={{is_default_branch}}
           type=raw,value={{branch}},enable={{is_default_branch}}
@@ -152,6 +170,49 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
         platforms: linux/amd64,linux/arm64
+
+    - name: Build documentation site
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        mkdocs build
+
+    - name: Upload documentation artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: identity-docs-site
+        path: site/
+        if-no-files-found: error
+        retention-days: 30
+        overwrite: true
+
+    - name: Upload Helm chart artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: identity-docs-helm
+        path: charts/identity-docs/
+        if-no-files-found: error
+        retention-days: 30
+        overwrite: true
+
+    - name: Package and upload release artifacts
+      if: startsWith(github.ref, 'refs/tags/v')
+      run: |
+        # Create release package
+        mkdir -p release-artifacts
+        
+        # Create documentation archive
+        tar -czf release-artifacts/identity-docs-site-${{ github.ref_name }}.tar.gz -C site .
+        
+        # Package Helm chart
+        helm package charts/identity-docs --destination release-artifacts --version ${{ github.ref_name }}
+        
+        # Upload to GitHub release
+        for file in release-artifacts/*; do
+          gh release upload "${{ github.ref_name }}" "$file"
+        done
+      env:
+        GH_TOKEN: ${{ github.token }}
 
   # Security scan - separate job to run after image is pushed
   security-scan:
@@ -295,7 +356,7 @@ jobs:
   deploy-staging:
     needs: [build]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop' && always()
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     environment: staging
     
     steps:
@@ -310,22 +371,23 @@ jobs:
     - name: Generate staging manifests
       run: |
         helm template identity-docs charts/identity-docs \
-          --set image.tag=${{ github.sha }} \
+          --set image.tag=develop-${{ github.sha }} \
           --set ingress.host=staging-docs.itlusions.com \
           --validate=false > manifests-staging.yaml
 
     - name: Deploy to staging
       run: |
         echo "Deploying to staging environment"
-        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop-${{ github.sha }}"
+        echo "Branch: develop"
         # Add your staging deployment logic here
         # kubectl apply -f manifests-staging.yaml or ArgoCD sync
 
   # Deploy to production (main branch)
   deploy-production:
-    needs: [build]
+    needs: [build, security-scan]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && always()
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: production
     
     steps:
@@ -340,41 +402,48 @@ jobs:
     - name: Generate production manifests
       run: |
         helm template identity-docs charts/identity-docs \
-          --set image.tag=${{ github.sha }} \
+          --set image.tag=main-${{ github.sha }} \
           --set ingress.host=docs.itlusions.com \
           --validate=false > manifests-production.yaml
 
-    # - name: Set up kubectl
-    #   uses: azure/setup-kubectl@v3
-    #   with:
-    #     version: 'v1.28.0'
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment"
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:main-${{ github.sha }}"
+        echo "Branch: main"
+        # Add your production deployment logic here
 
-    # - name: Deploy to production
-    #   run: |
-    #     echo "Deploying to production environment"
-    #     echo "Image: ${{ needs.build.outputs.image-tag }}"
-    #     # Add your production deployment logic here
-    #     # This could be:
-    #     # - kubectl apply -f manifests-production.yaml
-    #     # - ArgoCD app sync
-    #     # - Helm upgrade
-        
+  # Create releases for tags
+  create-release:
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
     - name: Create GitHub Release
-      if: github.ref == 'refs/heads/main'
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: docs-${{ github.sha }}
-        release_name: Documentation Release ${{ github.sha }}
+        tag_name: ${{ github.ref_name }}
+        release_name: Identity Platform Documentation ${{ github.ref_name }}
         body: |
-          Automated release of Identity Platform documentation
-          
-          **Changes:**
-          ${{ github.event.head_commit.message }}
+          Release of Identity Platform documentation ${{ github.ref_name }}
           
           **Docker Image:** 
-          `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}`
+          `${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}`
+          
+          **Artifacts:**
+          - Documentation site archive
+          - Helm chart package
+          
+          **Changes:**
+          See commit history for detailed changes.
         draft: false
         prerelease: false
 
