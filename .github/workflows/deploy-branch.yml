@@ -1,0 +1,676 @@
+name: Deploy Specific Branch
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy (e.g., feature/new-docs, develop, main)'
+        required: true
+        type: string
+        default: 'main'
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - development
+        - testing
+        - production
+      deployment_method:
+        description: 'Deployment method'
+        required: false
+        default: 'helm-direct'
+        type: choice
+        options:
+        - helm-direct
+        - argocd
+        - both
+      cleanup_after:
+        description: 'Auto-cleanup deployment after (hours, 0 = no cleanup)'
+        required: false
+        default: '24'
+        type: string
+      namespace_suffix:
+        description: 'Namespace suffix (optional, for parallel deployments)'
+        required: false
+        type: string
+      production_approval:
+        description: '⚠️ Required for production: Confirm deployment to PRODUCTION'
+        required: false
+        default: false
+        type: boolean
+      create_tag:
+        description: 'Create version tag after successful production deployment'
+        required: false
+        default: false
+        type: boolean
+      tag_version:
+        description: 'Version tag to create (e.g., v1.2.1-hotfix)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: itlusions/identity-docs
+
+jobs:
+  validate-production-request:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.environment == 'production' }}
+    steps:
+    - name: Validate production deployment request
+      run: |
+        echo "🚨 PRODUCTION DEPLOYMENT REQUEST"
+        echo "Branch: ${{ inputs.branch }}"
+        echo "Actor: ${{ github.actor }}"
+        echo "Approval given: ${{ inputs.production_approval }}"
+        
+        if [[ "${{ inputs.production_approval }}" != "true" ]]; then
+          echo "❌ Production deployment requires approval checkbox to be checked"
+          echo "Please confirm you understand this will deploy to PRODUCTION environment"
+          exit 1
+        fi
+        
+        echo "✅ Production deployment approved"
+
+  prepare-branch-deployment:
+    runs-on: ubuntu-latest
+    needs: [validate-production-request]
+    if: always() && (needs.validate-production-request.result == 'success' || inputs.environment != 'production')
+    outputs:
+      branch-safe: ${{ steps.prepare.outputs.branch-safe }}
+      namespace: ${{ steps.prepare.outputs.namespace }}
+      image-tag: ${{ steps.prepare.outputs.image-tag }}
+      chart-version: ${{ steps.prepare.outputs.chart-version }}
+      deployment-url: ${{ steps.prepare.outputs.deployment-url }}
+      is-production: ${{ steps.prepare.outputs.is-production }}
+    steps:
+    - name: Prepare branch deployment configuration
+      id: prepare
+      run: |
+        BRANCH="${{ inputs.branch }}"
+        ENVIRONMENT="${{ inputs.environment }}"
+        SUFFIX="${{ inputs.namespace_suffix }}"
+        
+        # Create safe branch name for Kubernetes (lowercase, replace special chars)
+        BRANCH_SAFE=$(echo "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g')
+        echo "branch-safe=$BRANCH_SAFE" >> $GITHUB_OUTPUT
+        
+        # Determine namespace and URL based on environment
+        if [[ "$ENVIRONMENT" == "production" ]]; then
+          NAMESPACE="docs"
+          DEPLOYMENT_URL="https://docs.itlusions.com/identity/"
+          echo "is-production=true" >> $GITHUB_OUTPUT
+        else
+          if [[ -n "$SUFFIX" ]]; then
+            NAMESPACE="docs-$ENVIRONMENT-$BRANCH_SAFE-$SUFFIX"
+            DEPLOYMENT_URL="https://docs-$ENVIRONMENT-$BRANCH_SAFE-$SUFFIX.itlusions.com/identity/"
+          else
+            NAMESPACE="docs-$ENVIRONMENT-$BRANCH_SAFE"
+            DEPLOYMENT_URL="https://docs-$ENVIRONMENT-$BRANCH_SAFE.itlusions.com/identity/"
+          fi
+          echo "is-production=false" >> $GITHUB_OUTPUT
+        fi
+        echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+        echo "deployment-url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+        
+        # Create unique image tag for this branch
+        if [[ "$ENVIRONMENT" == "production" ]]; then
+          IMAGE_TAG="branch-$BRANCH_SAFE-prod-$(date +%Y%m%d-%H%M%S)"
+        else
+          IMAGE_TAG="branch-$BRANCH_SAFE-$(date +%Y%m%d-%H%M%S)"
+        fi
+        echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+        
+        # Use latest chart version for branch deployments
+        CHART_VERSION="latest"
+        echo "chart-version=$CHART_VERSION" >> $GITHUB_OUTPUT
+        
+        echo "🌿 Branch deployment configuration:"
+        echo "Branch: $BRANCH → $BRANCH_SAFE"
+        echo "Environment: $ENVIRONMENT"
+        echo "Namespace: $NAMESPACE"
+        echo "Image Tag: $IMAGE_TAG"
+        echo "Deployment URL: $DEPLOYMENT_URL"
+        echo "Is Production: ${{ steps.prepare.outputs.is-production }}"
+
+  build-branch:
+    needs: [prepare-branch-deployment]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout specific branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.branch }}
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies and test documentation
+      run: |
+        echo "🧪 Testing documentation build from branch '${{ inputs.branch }}'..."
+        
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+        # Test MkDocs build
+        mkdocs build --strict
+        
+        echo "✅ Documentation build successful"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata for branch
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=raw,value=${{ needs.prepare-branch-deployment.outputs.image-tag }}
+          type=raw,value=branch-${{ needs.prepare-branch-deployment.outputs.branch-safe }}-latest
+
+    - name: Build and push branch image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: |
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.branch=${{ inputs.branch }}
+          org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+          deployment.environment=${{ inputs.environment }}
+          deployment.method=${{ inputs.deployment_method }}
+          deployment.actor=${{ github.actor }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+    - name: Test branch documentation
+      run: |
+        echo "🧪 Testing branch documentation container..."
+        
+        # Pull the built image and test it
+        docker run --rm \
+          --name test-branch-docs \
+          -p 8080:80 \
+          -d \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare-branch-deployment.outputs.image-tag }}
+        
+        # Wait for container to start
+        sleep 15
+        
+        # Test health endpoint
+        for i in {1..5}; do
+          if curl -f http://localhost:8080/; then
+            echo "✅ Branch documentation is responding"
+            break
+          else
+            echo "⏳ Waiting for documentation to start... (attempt $i/5)"
+            sleep 10
+          fi
+        done
+        
+        # Test some basic pages
+        if curl -f http://localhost:8080/ > /dev/null 2>&1; then
+          echo "✅ Documentation root accessible"
+        else
+          echo "❌ Documentation root not accessible"
+          exit 1
+        fi
+        
+        # Stop test container
+        docker stop test-branch-docs
+        
+        echo "✅ Branch documentation container test passed"
+
+  deploy-branch:
+    needs: [prepare-branch-deployment, build-branch]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure kubectl
+      run: |
+        echo "🔧 Configuring kubectl for branch deployment..."
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+        kubectl cluster-info
+
+    - name: Login to Helm registry
+      run: |
+        helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Deploy branch with ArgoCD
+      if: ${{ contains(inputs.deployment_method, 'argocd') }}
+      run: |
+        echo "🚀 Deploying via ArgoCD ApplicationSet update..."
+        
+        if [[ "${{ needs.prepare-branch-deployment.outputs.is-production }}" == "true" ]]; then
+          echo "📝 Updating production ApplicationSet with branch deployment"
+          
+          # Create production branch deployment ApplicationSet
+          cp argocd/applicationset.yaml argocd/applicationset-branch-prod.yaml
+          
+          # Update production configuration with branch image
+          sed -i '/environment: production/,/environment:/ {
+            s/imageTag: ".*"/imageTag: "${{ needs.prepare-branch-deployment.outputs.image-tag }}"/
+          }' argocd/applicationset-branch-prod.yaml
+          
+          kubectl apply -f argocd/project.yaml --validate=false
+          kubectl apply -f argocd/applicationset-branch-prod.yaml --validate=false
+          
+          echo "✅ Production ApplicationSet updated for branch deployment"
+        else
+          echo "ℹ️ ArgoCD deployment skipped for non-production branch environments"
+          echo "Use helm-direct method for branch testing environments"
+        fi
+
+    - name: Deploy branch with Helm
+      if: ${{ contains(inputs.deployment_method, 'helm') }}
+      run: |
+        NAMESPACE="${{ needs.prepare-branch-deployment.outputs.namespace }}"
+        IMAGE_TAG="${{ needs.prepare-branch-deployment.outputs.image-tag }}"
+        BRANCH_SAFE="${{ needs.prepare-branch-deployment.outputs.branch-safe }}"
+        DEPLOYMENT_URL="${{ needs.prepare-branch-deployment.outputs.deployment-url }}"
+        ENVIRONMENT="${{ inputs.environment }}"
+        
+        echo "🚀 Deploying branch '${{ inputs.branch }}' to environment '$ENVIRONMENT'"
+        echo "Namespace: $NAMESPACE"
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$IMAGE_TAG"
+        echo "URL: $DEPLOYMENT_URL"
+        
+        # Create environment-specific values
+        if [[ "$ENVIRONMENT" == "production" ]]; then
+          # Production configuration
+          cat > branch-values.yaml << EOF
+        image:
+          repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tag: "$IMAGE_TAG"
+          pullPolicy: IfNotPresent
+        
+        replicaCount: 2
+        
+        service:
+          type: ClusterIP
+          port: 80
+        
+        ingress:
+          enabled: true
+          className: "traefik"
+          annotations:
+            traefik.ingress.kubernetes.io/router.entrypoints: websecure
+            traefik.ingress.kubernetes.io/router.tls: "true"
+            traefik.ingress.kubernetes.io/router.middlewares: docs-identity-stripprefix@kubernetescrd,docs-headers@kubernetescrd
+          hosts:
+            - host: docs.itlusions.com
+              paths:
+                - path: /identity
+                  pathType: Prefix
+          tls:
+            - secretName: docs-tls
+              hosts:
+                - docs.itlusions.com
+        
+        hub:
+          enabled: true
+          centralService: "docs-central"
+          subpath: "identity"
+        
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        
+        autoscaling:
+          enabled: true
+          minReplicas: 2
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 80
+        
+        monitoring:
+          enabled: true
+          serviceMonitor:
+            enabled: true
+            namespace: monitoring
+        
+        # Add branch deployment metadata
+        podAnnotations:
+          deployment.kubernetes.io/branch: "${{ inputs.branch }}"
+          deployment.kubernetes.io/deployed-by: "${{ github.actor }}"
+          deployment.kubernetes.io/deployed-at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          deployment.kubernetes.io/environment: "production"
+          deployment.kubernetes.io/method: "branch-deployment"
+        
+        podSecurityContext:
+          fsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+        EOF
+        else
+          # Non-production configuration
+          cat > branch-values.yaml << EOF
+        image:
+          repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tag: "$IMAGE_TAG"
+          pullPolicy: IfNotPresent
+        
+        nameOverride: "identity-docs-$BRANCH_SAFE"
+        fullnameOverride: "identity-docs-$BRANCH_SAFE"
+        
+        replicaCount: 1
+        
+        service:
+          type: ClusterIP
+          port: 80
+        
+        ingress:
+          enabled: true
+          className: "traefik"
+          annotations:
+            traefik.ingress.kubernetes.io/router.entrypoints: websecure
+            traefik.ingress.kubernetes.io/router.tls: "true"
+            traefik.ingress.kubernetes.io/router.middlewares: docs-headers@kubernetescrd
+          hosts:
+            - host: docs-$ENVIRONMENT-$BRANCH_SAFE.itlusions.com
+              paths:
+                - path: /identity
+                  pathType: Prefix
+          tls:
+            - secretName: docs-branch-tls-$BRANCH_SAFE
+              hosts:
+                - docs-$ENVIRONMENT-$BRANCH_SAFE.itlusions.com
+        
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+        
+        # Add branch metadata
+        podAnnotations:
+          deployment.kubernetes.io/branch: "${{ inputs.branch }}"
+          deployment.kubernetes.io/deployed-by: "${{ github.actor }}"
+          deployment.kubernetes.io/deployed-at: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          deployment.kubernetes.io/cleanup-after: "${{ inputs.cleanup_after }}h"
+          deployment.kubernetes.io/environment: "$ENVIRONMENT"
+        
+        # Disable monitoring for branch deployments
+        monitoring:
+          enabled: false
+        
+        podSecurityContext:
+          fsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+        EOF
+        fi
+        
+        echo "📄 Branch deployment values:"
+        echo "=========================="
+        cat branch-values.yaml
+        
+        # Determine release name
+        if [[ "$ENVIRONMENT" == "production" ]]; then
+          RELEASE_NAME="identity-docs"
+        else
+          RELEASE_NAME="identity-docs-$BRANCH_SAFE"
+        fi
+        
+        echo ""
+        echo "🚀 Starting Helm deployment..."
+        echo "Release name: $RELEASE_NAME"
+        
+        # Install/upgrade the branch deployment
+        helm upgrade --install "$RELEASE_NAME" \
+          oci://${{ env.REGISTRY }}/itlusions/helm/identity-docs \
+          --namespace "$NAMESPACE" \
+          --create-namespace \
+          --values branch-values.yaml \
+          --wait \
+          --timeout 10m
+        
+        echo "✅ Branch deployment completed!"
+        
+        # Show deployment status
+        kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=identity-docs
+        kubectl get ingress -n "$NAMESPACE"
+        
+        echo ""
+        echo "🌐 Branch documentation available at: $DEPLOYMENT_URL"
+
+    - name: Schedule cleanup (if requested and not production)
+      if: ${{ inputs.cleanup_after != '0' && needs.prepare-branch-deployment.outputs.is-production != 'true' }}
+      run: |
+        NAMESPACE="${{ needs.prepare-branch-deployment.outputs.namespace }}"
+        CLEANUP_HOURS="${{ inputs.cleanup_after }}"
+        RELEASE_NAME="identity-docs-${{ needs.prepare-branch-deployment.outputs.branch-safe }}"
+        
+        echo "⏰ Scheduling cleanup in $CLEANUP_HOURS hours for non-production deployment"
+        
+        # Create cleanup job
+        cat > cleanup-job.yaml << EOF
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: cleanup-branch-deployment-$(date +%s)
+          namespace: $NAMESPACE
+        spec:
+          ttlSecondsAfterFinished: 3600
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: cleanup
+                image: bitnami/kubectl:latest
+                command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Sleeping for $CLEANUP_HOURS hours..."
+                  sleep \$((\$CLEANUP_HOURS * 3600))
+                  echo "Cleaning up branch deployment..."
+                  helm uninstall $RELEASE_NAME -n $NAMESPACE || echo "Helm release not found"
+                  kubectl delete namespace $NAMESPACE --ignore-not-found=true
+                  echo "Cleanup completed for branch deployment"
+        EOF
+        
+        kubectl apply -f cleanup-job.yaml
+        echo "✅ Cleanup job scheduled for $CLEANUP_HOURS hours"
+
+    - name: Create version tag (if requested for production)
+      if: ${{ inputs.create_tag && needs.prepare-branch-deployment.outputs.is-production == 'true' && inputs.tag_version }}
+      run: |
+        echo "🏷️  Creating version tag: ${{ inputs.tag_version }}"
+        
+        # Configure git for tagging
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        # Create and push tag
+        git tag "${{ inputs.tag_version }}" -m "Branch deployment tag: ${{ inputs.branch }} → production"
+        git push origin "${{ inputs.tag_version }}"
+        
+        echo "✅ Version tag ${{ inputs.tag_version }} created and pushed"
+
+  verify-deployment:
+    needs: [prepare-branch-deployment, build-branch, deploy-branch]
+    runs-on: ubuntu-latest
+    if: always() && needs.deploy-branch.result == 'success'
+    steps:
+    - name: Verify deployment health
+      run: |
+        DEPLOYMENT_URL="${{ needs.prepare-branch-deployment.outputs.deployment-url }}"
+        ENVIRONMENT="${{ inputs.environment }}"
+        
+        echo "🔍 Verifying deployment health..."
+        echo "URL: $DEPLOYMENT_URL"
+        
+        # Wait for deployment to stabilize
+        sleep 30
+        
+        # Test accessibility (skip SSL verification for staging environments)
+        if [[ "$ENVIRONMENT" == "production" ]]; then
+          CURL_OPTS=""
+        else
+          CURL_OPTS="-k"  # Allow self-signed certificates for staging
+        fi
+        
+        # Health check with retries
+        for i in {1..5}; do
+          if curl $CURL_OPTS -f -s "$DEPLOYMENT_URL" > /dev/null; then
+            echo "✅ Deployment is responding (attempt $i/5)"
+            break
+          else
+            echo "⏳ Waiting for deployment to respond... (attempt $i/5)"
+            if [[ $i -eq 5 ]]; then
+              echo "❌ Deployment health check failed after 5 attempts"
+              echo "This might be expected for new subdomain deployments"
+              echo "Please check DNS configuration and certificate provisioning"
+            else
+              sleep 30
+            fi
+          fi
+        done
+        
+        echo "📊 Deployment verification completed"
+
+  notify-branch-deployment:
+    needs: [prepare-branch-deployment, build-branch, deploy-branch, verify-deployment]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Determine notification status
+      id: status
+      run: |
+        DEPLOY_STATUS="${{ needs.deploy-branch.result }}"
+        VERIFY_STATUS="${{ needs.verify-deployment.result }}"
+        
+        if [[ "$DEPLOY_STATUS" == "success" ]]; then
+          if [[ "$VERIFY_STATUS" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "emoji=✅" >> $GITHUB_OUTPUT
+            echo "message=Deployment successful and verified" >> $GITHUB_OUTPUT
+          else
+            echo "status=warning" >> $GITHUB_OUTPUT
+            echo "emoji=⚠️" >> $GITHUB_OUTPUT
+            echo "message=Deployment successful but verification had issues" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "emoji=❌" >> $GITHUB_OUTPUT
+          echo "message=Deployment failed" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create deployment summary
+      run: |
+        echo "## 🌿 Branch Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Branch** | \`${{ inputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Environment** | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Method** | \`${{ inputs.deployment_method }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Namespace** | \`${{ needs.prepare-branch-deployment.outputs.namespace }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Image Tag** | \`${{ needs.prepare-branch-deployment.outputs.image-tag }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Actor** | \`${{ github.actor }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Cleanup After** | \`${{ inputs.cleanup_after }} hours\` |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔗 Access Information" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Documentation URL**: ${{ needs.prepare-branch-deployment.outputs.deployment-url }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Docker Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare-branch-deployment.outputs.image-tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Deployment Status" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "${{ steps.status.outputs.emoji }} **${{ steps.status.outputs.message }}**" >> $GITHUB_STEP_SUMMARY
+
+    - name: Notify Teams about branch deployment
+      if: ${{ secrets.TEAMS_WEBHOOK }}
+      run: |
+        STATUS="${{ steps.status.outputs.status }}"
+        EMOJI="${{ steps.status.outputs.emoji }}"
+        MESSAGE="${{ steps.status.outputs.message }}"
+        
+        cat > teams_payload.json << EOF
+        {
+          "title": "🌿 Branch Deployment: ${{ inputs.branch }}",
+          "status": "$STATUS",
+          "emoji": "$EMOJI",
+          "message": "$MESSAGE",
+          "branch": "${{ inputs.branch }}",
+          "environment": "${{ inputs.environment }}",
+          "namespace": "${{ needs.prepare-branch-deployment.outputs.namespace }}",
+          "actor": "${{ github.actor }}",
+          "image_tag": "${{ needs.prepare-branch-deployment.outputs.image-tag }}",
+          "deployment_url": "${{ needs.prepare-branch-deployment.outputs.deployment-url }}",
+          "cleanup_after": "${{ inputs.cleanup_after }}h",
+          "deployment_method": "${{ inputs.deployment_method }}",
+          "is_production": "${{ needs.prepare-branch-deployment.outputs.is-production }}",
+          "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        EOF
+        
+        echo "📧 Sending Teams notification..."
+        curl -H "Content-Type: application/json" \
+             -d @teams_payload.json \
+             "${{ secrets.TEAMS_WEBHOOK }}"
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Teams notification sent successfully"
+        else
+          echo "❌ Failed to send Teams notification"
+        fi

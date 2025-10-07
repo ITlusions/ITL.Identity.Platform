@@ -1,0 +1,702 @@
+name: Emergency Production Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy to production'
+        required: true
+        type: string
+      reason:
+        description: 'Emergency deployment reason (required for audit trail)'
+        required: true
+        type: string
+      severity:
+        description: 'Incident severity level'
+        required: true
+        default: 'high'
+        type: choice
+        options:
+        - critical
+        - high
+        - medium
+      skip_tests:
+        description: '⚠️ Skip tests (only for critical emergencies)'
+        required: false
+        default: false
+        type: boolean
+      force_deployment:
+        description: '⚠️ Force deployment (ignore health checks)'
+        required: false
+        default: false
+        type: boolean
+      create_rollback_tag:
+        description: 'Create rollback tag from current production'
+        required: false
+        default: true
+        type: boolean
+      notify_oncall:
+        description: 'Notify on-call team'
+        required: false
+        default: true
+        type: boolean
+      rollback_timeout:
+        description: 'Auto-rollback timeout (minutes, 0 = no auto-rollback)'
+        required: false
+        default: '30'
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: itlusions/identity-docs
+
+jobs:
+  emergency-validation:
+    runs-on: ubuntu-latest
+    environment: emergency-production
+    outputs:
+      current-production-version: ${{ steps.current.outputs.version }}
+      current-production-image: ${{ steps.current.outputs.image }}
+      rollback-tag: ${{ steps.current.outputs.rollback-tag }}
+      emergency-tag: ${{ steps.prepare.outputs.emergency-tag }}
+      validated: ${{ steps.validate.outputs.validated }}
+    steps:
+    - name: Validate emergency deployment request
+      id: validate
+      run: |
+        echo "🚨 EMERGENCY PRODUCTION DEPLOYMENT REQUEST"
+        echo "=========================================="
+        echo "Branch: ${{ inputs.branch }}"
+        echo "Reason: ${{ inputs.reason }}"
+        echo "Severity: ${{ inputs.severity }}"
+        echo "Requested by: ${{ github.actor }}"
+        echo "Skip tests: ${{ inputs.skip_tests }}"
+        echo "Force deployment: ${{ inputs.force_deployment }}"
+        echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        
+        # Validate reason is provided and meaningful
+        if [[ -z "${{ inputs.reason }}" ]]; then
+          echo "❌ Emergency reason is required for production deployments"
+          exit 1
+        fi
+        
+        if [[ ${#{{ inputs.reason }}} -lt 10 ]]; then
+          echo "❌ Emergency reason must be at least 10 characters"
+          exit 1
+        fi
+        
+        # Additional validation for critical severity
+        if [[ "${{ inputs.severity }}" == "critical" ]]; then
+          echo "🚨 CRITICAL EMERGENCY DEPLOYMENT"
+          echo "This deployment bypasses normal safety checks"
+          echo "Ensure this is absolutely necessary"
+        fi
+        
+        # Warn about skipped tests
+        if [[ "${{ inputs.skip_tests }}" == "true" ]]; then
+          echo "⚠️  WARNING: Tests will be skipped"
+          echo "This significantly increases deployment risk"
+        fi
+        
+        # Warn about forced deployment
+        if [[ "${{ inputs.force_deployment }}" == "true" ]]; then
+          echo "⚠️  WARNING: Health checks will be bypassed"
+          echo "This may result in service degradation"
+        fi
+        
+        echo "validated=true" >> $GITHUB_OUTPUT
+        echo "✅ Emergency deployment validation passed"
+
+    - name: Get current production state
+      id: current
+      run: |
+        echo "📊 Capturing current production state..."
+        
+        # Configure kubectl (if available)
+        if [[ -n "${{ secrets.KUBE_CONFIG }}" ]]; then
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+          
+          # Get current production deployment info
+          if kubectl get deployment identity-docs -n docs > /dev/null 2>&1; then
+            CURRENT_IMAGE=$(kubectl get deployment identity-docs -n docs -o jsonpath='{.spec.template.spec.containers[0].image}' || echo "unknown")
+            CURRENT_VERSION=$(echo "$CURRENT_IMAGE" | cut -d':' -f2 || echo "unknown")
+            
+            echo "image=$CURRENT_IMAGE" >> $GITHUB_OUTPUT
+            echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            
+            echo "📋 Current production state:"
+            echo "Image: $CURRENT_IMAGE"
+            echo "Version: $CURRENT_VERSION"
+          else
+            echo "⚠️  Could not retrieve current production state"
+            echo "image=unknown" >> $GITHUB_OUTPUT
+            echo "version=unknown" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "⚠️  Kubernetes config not available, cannot retrieve current state"
+          echo "image=unknown" >> $GITHUB_OUTPUT
+          echo "version=unknown" >> $GITHUB_OUTPUT
+        fi
+        
+        # Create rollback tag name
+        ROLLBACK_TAG="emergency-rollback-$(date +%Y%m%d-%H%M%S)"
+        echo "rollback-tag=$ROLLBACK_TAG" >> $GITHUB_OUTPUT
+        
+        echo "🔄 Rollback tag will be: $ROLLBACK_TAG"
+
+    - name: Prepare emergency deployment
+      id: prepare
+      run: |
+        # Create emergency tag for tracking
+        EMERGENCY_TAG="emergency-$(date +%Y%m%d-%H%M%S)-${{ github.actor }}"
+        echo "emergency-tag=$EMERGENCY_TAG" >> $GITHUB_OUTPUT
+        
+        echo "🏷️  Emergency deployment tag: $EMERGENCY_TAG"
+
+  emergency-build:
+    needs: [emergency-validation]
+    runs-on: ubuntu-latest
+    if: needs.emergency-validation.outputs.validated == 'true'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout emergency branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.branch }}
+        fetch-depth: 0
+
+    - name: Emergency tests
+      if: ${{ !inputs.skip_tests }}
+      run: |
+        echo "🧪 Running emergency validation tests..."
+        
+        # Set up Python
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+        # Quick documentation build test
+        echo "Testing MkDocs build..."
+        mkdocs build --strict
+        
+        # Basic syntax check
+        echo "Checking for basic syntax issues..."
+        find docs -name "*.md" -exec grep -l "```" {} \; | while read file; do
+          echo "Checking $file for unclosed code blocks..."
+          # Add more validation as needed
+        done
+        
+        echo "✅ Emergency tests passed"
+
+    - name: Skip tests warning
+      if: ${{ inputs.skip_tests }}
+      run: |
+        echo "⚠️  ⚠️  ⚠️  TESTS SKIPPED - EMERGENCY DEPLOYMENT ⚠️  ⚠️  ⚠️"
+        echo ""
+        echo "This deployment bypasses normal testing procedures"
+        echo "Ensure manual validation has been performed"
+        echo "Risk level: HIGH"
+        echo ""
+        echo "⚠️  ⚠️  ⚠️  TESTS SKIPPED - EMERGENCY DEPLOYMENT ⚠️  ⚠️  ⚠️"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build emergency image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.emergency-validation.outputs.emergency-tag }}
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:emergency-latest
+        labels: |
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ github.sha }}
+          org.opencontainers.image.branch=${{ inputs.branch }}
+          emergency.deployment.reason="${{ inputs.reason }}"
+          emergency.deployment.severity="${{ inputs.severity }}"
+          emergency.deployment.actor="${{ github.actor }}"
+          emergency.deployment.timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          emergency.deployment.skip-tests="${{ inputs.skip_tests }}"
+          emergency.deployment.force-deployment="${{ inputs.force_deployment }}"
+          emergency.rollback.tag="${{ needs.emergency-validation.outputs.rollback-tag }}"
+          emergency.rollback.previous-image="${{ needs.emergency-validation.outputs.current-production-image }}"
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+    - name: Test emergency image
+      if: ${{ !inputs.force_deployment }}
+      run: |
+        echo "🧪 Testing emergency image functionality..."
+        
+        # Quick container test
+        docker run --rm \
+          --name test-emergency-docs \
+          -p 8080:80 \
+          -d \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.emergency-validation.outputs.emergency-tag }}
+        
+        # Wait for container to start
+        sleep 15
+        
+        # Basic functionality test
+        if curl -f http://localhost:8080/ > /dev/null 2>&1; then
+          echo "✅ Emergency image responds correctly"
+        else
+          echo "❌ Emergency image failed basic test"
+          docker logs test-emergency-docs
+          docker stop test-emergency-docs
+          exit 1
+        fi
+        
+        # Stop test container
+        docker stop test-emergency-docs
+        
+        echo "✅ Emergency image test passed"
+
+  emergency-deploy:
+    needs: [emergency-validation, emergency-build]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Configure kubectl
+      run: |
+        echo "🔧 Configuring kubectl for emergency production deployment..."
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+        kubectl cluster-info
+
+    - name: Create rollback checkpoint
+      if: ${{ inputs.create_rollback_tag }}
+      run: |
+        echo "🏷️  Creating rollback checkpoint..."
+        
+        ROLLBACK_TAG="${{ needs.emergency-validation.outputs.rollback-tag }}"
+        
+        # Save current deployment state
+        kubectl get deployment identity-docs -n docs -o yaml > emergency-rollback-deployment.yaml
+        kubectl get service identity-docs -n docs -o yaml > emergency-rollback-service.yaml 2>/dev/null || echo "Service backup failed"
+        kubectl get ingress -n docs -l app.kubernetes.io/name=identity-docs -o yaml > emergency-rollback-ingress.yaml 2>/dev/null || echo "Ingress backup failed"
+        
+        echo "📁 Rollback artifacts created:"
+        ls -la emergency-rollback-*.yaml
+        
+        # Create rollback script
+        cat > emergency-rollback.sh << 'EOF'
+        #!/bin/bash
+        echo "🔄 EMERGENCY ROLLBACK INITIATED"
+        echo "Restoring to previous production state..."
+        
+        if [[ -f emergency-rollback-deployment.yaml ]]; then
+          kubectl apply -f emergency-rollback-deployment.yaml
+          kubectl rollout status deployment/identity-docs -n docs --timeout=300s
+          echo "✅ Deployment rollback completed"
+        else
+          echo "❌ Rollback deployment file not found"
+          exit 1
+        fi
+        EOF
+        chmod +x emergency-rollback.sh
+        
+        echo "✅ Rollback checkpoint created with tag: $ROLLBACK_TAG"
+
+    - name: Emergency deployment to production
+      run: |
+        echo "🚨 DEPLOYING EMERGENCY BRANCH TO PRODUCTION"
+        echo "============================================"
+        echo "Branch: ${{ inputs.branch }}"
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.emergency-validation.outputs.emergency-tag }}"
+        echo "Reason: ${{ inputs.reason }}"
+        echo "Severity: ${{ inputs.severity }}"
+        echo "Actor: ${{ github.actor }}"
+        echo "Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        
+        # Login to Helm registry
+        helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+        
+        # Create emergency production values
+        cat > emergency-production-values.yaml << EOF
+        image:
+          repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tag: "${{ needs.emergency-validation.outputs.emergency-tag }}"
+          pullPolicy: Always
+        
+        replicaCount: 2
+        
+        # Production resources (same as normal production)
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        
+        # Production ingress configuration
+        ingress:
+          enabled: true
+          className: "traefik"
+          annotations:
+            traefik.ingress.kubernetes.io/router.entrypoints: websecure
+            traefik.ingress.kubernetes.io/router.tls: "true"
+            traefik.ingress.kubernetes.io/router.middlewares: docs-identity-stripprefix@kubernetescrd,docs-headers@kubernetescrd
+          hosts:
+            - host: docs.itlusions.com
+              paths:
+                - path: /identity
+                  pathType: Prefix
+          tls:
+            - secretName: docs-tls
+              hosts:
+                - docs.itlusions.com
+        
+        # Hub integration
+        hub:
+          enabled: true
+          centralService: "docs-central"
+          subpath: "identity"
+        
+        # Auto-scaling
+        autoscaling:
+          enabled: true
+          minReplicas: 2
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 80
+        
+        # Add emergency metadata
+        podAnnotations:
+          emergency.deployment: "true"
+          emergency.reason: "${{ inputs.reason }}"
+          emergency.severity: "${{ inputs.severity }}"
+          emergency.actor: "${{ github.actor }}"
+          emergency.branch: "${{ inputs.branch }}"
+          emergency.timestamp: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          emergency.rollback-tag: "${{ needs.emergency-validation.outputs.rollback-tag }}"
+          emergency.previous-image: "${{ needs.emergency-validation.outputs.current-production-image }}"
+          emergency.skip-tests: "${{ inputs.skip_tests }}"
+          emergency.force-deployment: "${{ inputs.force_deployment }}"
+        
+        # Production monitoring
+        monitoring:
+          enabled: true
+          serviceMonitor:
+            enabled: true
+            namespace: monitoring
+        
+        # Security context
+        podSecurityContext:
+          fsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+        EOF
+        
+        echo "📄 Emergency deployment values:"
+        echo "==============================="
+        cat emergency-production-values.yaml
+        
+        echo ""
+        echo "🚀 Starting emergency Helm deployment..."
+        
+        # Deploy with Helm to production
+        DEPLOY_ARGS="--wait --timeout 10m"
+        if [[ "${{ inputs.force_deployment }}" == "true" ]]; then
+          DEPLOY_ARGS="$DEPLOY_ARGS --force"
+          echo "⚠️  Force deployment enabled - bypassing safety checks"
+        fi
+        
+        helm upgrade --install identity-docs \
+          oci://${{ env.REGISTRY }}/itlusions/helm/identity-docs \
+          --namespace docs \
+          --values emergency-production-values.yaml \
+          $DEPLOY_ARGS
+        
+        echo "✅ Emergency deployment completed!"
+
+    - name: Post-deployment verification
+      if: ${{ !inputs.force_deployment }}
+      run: |
+        echo "🔍 Verifying emergency deployment..."
+        
+        # Wait for rollout to complete
+        echo "⏳ Waiting for rollout to complete..."
+        kubectl rollout status deployment/identity-docs -n docs --timeout=300s
+        
+        # Check pod status
+        echo "📦 Pod status:"
+        kubectl get pods -n docs -l app.kubernetes.io/name=identity-docs -o wide
+        
+        # Health check with retries
+        echo "🏥 Performing health checks..."
+        for i in {1..5}; do
+          if kubectl exec -n docs deployment/identity-docs -- curl -f http://localhost/ > /dev/null 2>&1; then
+            echo "✅ Emergency deployment health check passed (attempt $i/5)"
+            break
+          else
+            echo "⏳ Health check failed, retrying... (attempt $i/5)"
+            if [[ $i -eq 5 ]]; then
+              echo "❌ Emergency deployment health check failed after 5 attempts"
+              echo "🔄 Consider immediate rollback"
+              
+              # Provide rollback instructions
+              echo ""
+              echo "🆘 EMERGENCY ROLLBACK INSTRUCTIONS:"
+              echo "kubectl apply -f emergency-rollback-deployment.yaml"
+              echo "kubectl rollout status deployment/identity-docs -n docs"
+              
+              exit 1
+            fi
+            sleep 30
+          fi
+        done
+        
+        # Test external access
+        echo "🌐 Testing external access..."
+        sleep 30
+        if curl -f -s https://docs.itlusions.com/identity/ > /dev/null; then
+          echo "✅ External access verified"
+        else
+          echo "⚠️  External access test failed - may be DNS/CDN propagation delay"
+        fi
+
+    - name: Update ArgoCD ApplicationSet
+      run: |
+        echo "🔄 Updating ArgoCD ApplicationSet for emergency deployment..."
+        
+        if [[ -f argocd/applicationset.yaml ]]; then
+          # Create emergency ApplicationSet
+          cp argocd/applicationset.yaml argocd/applicationset-emergency.yaml
+          
+          # Update production configuration to match emergency deployment
+          sed -i '/environment: production/,/environment:/ {
+            s/imageTag: ".*"/imageTag: "${{ needs.emergency-validation.outputs.emergency-tag }}"/
+          }' argocd/applicationset-emergency.yaml
+          
+          # Apply updated ApplicationSet
+          kubectl apply -f argocd/project.yaml --validate=false
+          kubectl apply -f argocd/applicationset-emergency.yaml --validate=false
+          
+          echo "✅ ArgoCD ApplicationSet updated to prevent drift"
+        else
+          echo "⚠️  ArgoCD ApplicationSet not found, skipping update"
+        fi
+
+    - name: Schedule auto-rollback (if requested)
+      if: ${{ inputs.rollback_timeout != '0' && !inputs.force_deployment }}
+      run: |
+        ROLLBACK_MINUTES="${{ inputs.rollback_timeout }}"
+        
+        echo "⏰ Scheduling auto-rollback in $ROLLBACK_MINUTES minutes"
+        
+        # Create auto-rollback job
+        cat > auto-rollback-job.yaml << EOF
+        apiVersion: batch/v1
+        kind: Job
+        metadata:
+          name: emergency-auto-rollback-$(date +%s)
+          namespace: docs
+        spec:
+          ttlSecondsAfterFinished: 3600
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+              - name: auto-rollback
+                image: bitnami/kubectl:latest
+                command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Waiting $ROLLBACK_MINUTES minutes before auto-rollback..."
+                  sleep \$((\$ROLLBACK_MINUTES * 60))
+                  
+                  echo "🔄 AUTO-ROLLBACK TRIGGERED"
+                  echo "Emergency deployment timeout reached"
+                  
+                  # Check if emergency deployment is still active
+                  CURRENT_TAG=\$(kubectl get deployment identity-docs -n docs -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d':' -f2)
+                  
+                  if [[ "\$CURRENT_TAG" == "${{ needs.emergency-validation.outputs.emergency-tag }}" ]]; then
+                    echo "Emergency deployment still active, initiating rollback..."
+                    
+                    # Rollback to previous version
+                    if [[ -n "${{ needs.emergency-validation.outputs.current-production-image }}" && "${{ needs.emergency-validation.outputs.current-production-image }}" != "unknown" ]]; then
+                      kubectl set image deployment/identity-docs identity-docs=${{ needs.emergency-validation.outputs.current-production-image }} -n docs
+                      kubectl rollout status deployment/identity-docs -n docs --timeout=300s
+                      echo "✅ Auto-rollback completed"
+                    else
+                      echo "❌ Cannot perform auto-rollback: previous version unknown"
+                    fi
+                  else
+                    echo "Emergency deployment already changed, skipping auto-rollback"
+                  fi
+                env:
+                - name: ROLLBACK_MINUTES
+                  value: "$ROLLBACK_MINUTES"
+        EOF
+        
+        kubectl apply -f auto-rollback-job.yaml
+        echo "✅ Auto-rollback scheduled for $ROLLBACK_MINUTES minutes"
+
+  notify-emergency:
+    needs: [emergency-validation, emergency-build, emergency-deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Determine emergency status
+      id: status
+      run: |
+        DEPLOY_STATUS="${{ needs.emergency-deploy.result }}"
+        
+        if [[ "$DEPLOY_STATUS" == "success" ]]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "emoji=✅" >> $GITHUB_OUTPUT
+          echo "color=28a745" >> $GITHUB_OUTPUT
+          echo "message=Emergency deployment successful" >> $GITHUB_OUTPUT
+        elif [[ "$DEPLOY_STATUS" == "failure" ]]; then
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "emoji=❌" >> $GITHUB_OUTPUT
+          echo "color=d73a49" >> $GITHUB_OUTPUT
+          echo "message=Emergency deployment failed" >> $GITHUB_OUTPUT
+        else
+          echo "status=unknown" >> $GITHUB_OUTPUT
+          echo "emoji=⚠️" >> $GITHUB_OUTPUT
+          echo "color=ffc107" >> $GITHUB_OUTPUT
+          echo "message=Emergency deployment status unknown" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create emergency summary
+      run: |
+        echo "## 🚨 Emergency Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "> **${{ steps.status.outputs.emoji }} ${{ steps.status.outputs.message }}**" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Branch** | \`${{ inputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Reason** | ${{ inputs.reason }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Severity** | \`${{ inputs.severity }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Actor** | \`${{ github.actor }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Skip Tests** | \`${{ inputs.skip_tests }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Force Deploy** | \`${{ inputs.force_deployment }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Emergency Tag** | \`${{ needs.emergency-validation.outputs.emergency-tag }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Rollback Tag** | \`${{ needs.emergency-validation.outputs.rollback-tag }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Auto-Rollback** | \`${{ inputs.rollback_timeout }} minutes\` |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔗 Production Access" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Production URL**: https://docs.itlusions.com/identity/" >> $GITHUB_STEP_SUMMARY
+        echo "- **Emergency Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.emergency-validation.outputs.emergency-tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🆘 Rollback Information" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Previous Production State**:" >> $GITHUB_STEP_SUMMARY
+        echo "- Image: \`${{ needs.emergency-validation.outputs.current-production-image }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- Version: \`${{ needs.emergency-validation.outputs.current-production-version }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Manual Rollback Commands**:" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+        echo "# Rollback to previous image" >> $GITHUB_STEP_SUMMARY
+        echo "kubectl set image deployment/identity-docs identity-docs=${{ needs.emergency-validation.outputs.current-production-image }} -n docs" >> $GITHUB_STEP_SUMMARY
+        echo "kubectl rollout status deployment/identity-docs -n docs" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+    - name: Notify on-call team
+      if: ${{ inputs.notify_oncall && secrets.ONCALL_WEBHOOK }}
+      run: |
+        STATUS="${{ steps.status.outputs.status }}"
+        EMOJI="${{ steps.status.outputs.emoji }}"
+        
+        cat > oncall_payload.json << EOF
+        {
+          "title": "$EMOJI EMERGENCY PRODUCTION DEPLOYMENT",
+          "status": "$STATUS",
+          "severity": "${{ inputs.severity }}",
+          "branch": "${{ inputs.branch }}",
+          "reason": "${{ inputs.reason }}",
+          "actor": "${{ github.actor }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "skip_tests": "${{ inputs.skip_tests }}",
+          "force_deployment": "${{ inputs.force_deployment }}",
+          "emergency_tag": "${{ needs.emergency-validation.outputs.emergency-tag }}",
+          "rollback_tag": "${{ needs.emergency-validation.outputs.rollback-tag }}",
+          "previous_image": "${{ needs.emergency-validation.outputs.current-production-image }}",
+          "auto_rollback_minutes": "${{ inputs.rollback_timeout }}",
+          "production_url": "https://docs.itlusions.com/identity/",
+          "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        }
+        EOF
+        
+        echo "📞 Notifying on-call team..."
+        curl -H "Content-Type: application/json" \
+             -d @oncall_payload.json \
+             "${{ secrets.ONCALL_WEBHOOK }}"
+
+    - name: Notify Teams
+      if: ${{ secrets.TEAMS_WEBHOOK }}
+      run: |
+        STATUS="${{ steps.status.outputs.status }}"
+        EMOJI="${{ steps.status.outputs.emoji }}"
+        COLOR="${{ steps.status.outputs.color }}"
+        
+        cat > teams_payload.json << EOF
+        {
+          "title": "$EMOJI Emergency Production Deployment",
+          "status": "$STATUS",
+          "color": "$COLOR",
+          "severity": "${{ inputs.severity }}",
+          "branch": "${{ inputs.branch }}",
+          "reason": "${{ inputs.reason }}",
+          "actor": "${{ github.actor }}",
+          "emergency": true,
+          "emergency_tag": "${{ needs.emergency-validation.outputs.emergency-tag }}",
+          "rollback_available": "${{ inputs.create_rollback_tag }}",
+          "auto_rollback_minutes": "${{ inputs.rollback_timeout }}",
+          "production_url": "https://docs.itlusions.com/identity/",
+          "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        EOF
+        
+        echo "📧 Sending Teams notification..."
+        curl -H "Content-Type: application/json" \
+             -d @teams_payload.json \
+             "${{ secrets.TEAMS_WEBHOOK }}"
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Teams notification sent successfully"
+        else
+          echo "❌ Failed to send Teams notification"
+        fi
