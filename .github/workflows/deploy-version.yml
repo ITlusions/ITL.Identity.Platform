@@ -1,0 +1,523 @@
+name: Deploy Specific Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., v1.2.0)'
+        required: true
+        type: string
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      deployment_method:
+        description: 'Deployment method'
+        required: false
+        default: 'argocd'
+        type: choice
+        options:
+        - argocd
+        - helm-direct
+        - both
+      force_sync:
+        description: 'Force sync (ignore cache and current state)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: itlusions/identity-docs
+
+jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      chart-version: ${{ steps.validate.outputs.chart-version }}
+      image-exists: ${{ steps.validate.outputs.image-exists }}
+      chart-exists: ${{ steps.validate.outputs.chart-exists }}
+    steps:
+    - name: Validate version format
+      id: validate
+      run: |
+        VERSION="${{ inputs.version }}"
+        
+        # Validate version format
+        if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+          echo "❌ Invalid version format: $VERSION"
+          echo "Expected format: vX.Y.Z or vX.Y.Z-suffix (e.g., v1.2.0, v1.2.0-alpha.1)"
+          exit 1
+        fi
+        
+        CHART_VERSION=$(echo "$VERSION" | sed 's/^v//')
+        echo "chart-version=$CHART_VERSION" >> $GITHUB_OUTPUT
+        echo "✅ Version format valid: $VERSION (Chart: $CHART_VERSION)"
+
+    - name: Check if Docker image exists
+      id: check-image
+      run: |
+        echo "🔍 Checking if Docker image exists: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}"
+        
+        # Login to registry
+        echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+        
+        # Try to pull image manifest
+        if docker manifest inspect "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}" > /dev/null 2>&1; then
+          echo "image-exists=true" >> $GITHUB_OUTPUT
+          echo "✅ Docker image found"
+        else
+          echo "image-exists=false" >> $GITHUB_OUTPUT
+          echo "❌ Docker image not found - this version may need to be built first"
+        fi
+
+    - name: Check if Helm chart exists
+      id: check-chart
+      run: |
+        echo "🔍 Checking if Helm chart exists: oci://${{ env.REGISTRY }}/itlusions/helm/identity-docs:${{ steps.validate.outputs.chart-version }}"
+        
+        # Install Helm
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+        
+        # Login to Helm registry
+        helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+        
+        # Try to pull chart info
+        if helm show chart "oci://${{ env.REGISTRY }}/itlusions/helm/identity-docs" --version "${{ steps.validate.outputs.chart-version }}" > /dev/null 2>&1; then
+          echo "chart-exists=true" >> $GITHUB_OUTPUT
+          echo "✅ Helm chart found"
+        else
+          echo "chart-exists=false" >> $GITHUB_OUTPUT
+          echo "❌ Helm chart not found - this version may need to be built first"
+        fi
+
+    - name: Validation Summary
+      run: |
+        echo "## 📋 Validation Summary" >> $GITHUB_STEP_SUMMARY
+        echo "| Component | Status | Version |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker Image | ${{ steps.validate.outputs.image-exists == 'true' && '✅ Found' || '❌ Missing' }} | ${{ inputs.version }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Helm Chart | ${{ steps.validate.outputs.chart-exists == 'true' && '✅ Found' || '❌ Missing' }} | ${{ steps.validate.outputs.chart-version }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Target Environment | 🎯 Selected | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Deployment Method | 🚀 Selected | ${{ inputs.deployment_method }} |" >> $GITHUB_STEP_SUMMARY
+        
+        # Fail if required artifacts don't exist
+        if [[ "${{ steps.validate.outputs.image-exists }}" != "true" ]] || [[ "${{ steps.validate.outputs.chart-exists }}" != "true" ]]; then
+          echo ""
+          echo "⚠️ **Warning**: Some artifacts are missing. You may need to:"
+          echo "1. Build and push the missing version first"
+          echo "2. Check if the version tag exists in the repository"
+          echo "3. Verify the version format is correct"
+          echo ""
+          echo "**Recommendation**: Run the main build pipeline for this version first:"
+          echo "\`\`\`bash"
+          echo "git tag ${{ inputs.version }}"
+          echo "git push origin ${{ inputs.version }}"
+          echo "\`\`\`"
+        fi
+
+  deploy-argocd:
+    needs: [validate-version]
+    runs-on: ubuntu-latest
+    if: ${{ contains(inputs.deployment_method, 'argocd') && needs.validate-version.outputs.chart-exists == 'true' }}
+    environment: ${{ inputs.environment }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure kubectl
+      run: |
+        echo "🔧 Configuring kubectl for ArgoCD cluster..."
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+        kubectl cluster-info
+        kubectl get namespaces | head -10
+
+    - name: Update ApplicationSet for specific version
+      run: |
+        echo "🚀 Preparing ArgoCD deployment for version ${{ inputs.version }} to ${{ inputs.environment }}"
+        
+        # Create version-specific ApplicationSet
+        cp argocd/applicationset.yaml argocd/applicationset-version-deploy.yaml
+        
+        CHART_VERSION="${{ needs.validate-version.outputs.chart-version }}"
+        
+        # Update the specific environment
+        if [[ "${{ inputs.environment }}" == "production" ]]; then
+          echo "📝 Updating production environment configuration..."
+          # Update production environment settings
+          sed -i "/- environment: production/,/- environment:/ {
+            s/chartVersion: \"[^\"]*\"/chartVersion: \"$CHART_VERSION\"/g
+            s/imageTag: \"[^\"]*\"/imageTag: \"${{ inputs.version }}\"/g
+          }" argocd/applicationset-version-deploy.yaml
+        else
+          echo "📝 Updating staging environment configuration..."
+          # Update staging environment settings
+          sed -i "/- environment: staging/,/- environment:/ {
+            s/chartVersion: \"[^\"]*\"/chartVersion: \"$CHART_VERSION\"/g
+            s/imageTag: \"[^\"]*\"/imageTag: \"${{ inputs.version }}\"/g
+          }" argocd/applicationset-version-deploy.yaml
+        fi
+        
+        echo "📄 Updated ApplicationSet configuration preview:"
+        echo "=============================================="
+        grep -A 15 -B 5 "environment: ${{ inputs.environment }}" argocd/applicationset-version-deploy.yaml || echo "Environment section not found"
+
+    - name: Apply ApplicationSet
+      run: |
+        echo "📋 Applying AppProject and ApplicationSet to ArgoCD..."
+        
+        # Apply AppProject first
+        kubectl apply -f argocd/project.yaml --validate=false
+        echo "✅ AppProject applied successfully"
+        
+        # Apply ApplicationSet
+        kubectl apply -f argocd/applicationset-version-deploy.yaml --validate=false
+        echo "✅ ApplicationSet applied successfully"
+        
+        echo "⏳ Waiting for ApplicationSet to generate applications..."
+        sleep 20
+        
+        # Check application status
+        echo "📱 Generated Applications:"
+        kubectl get applications -n argocd -l app.kubernetes.io/name=identity-docs -o wide || echo "No applications found yet"
+
+    - name: Force sync if requested
+      if: ${{ inputs.force_sync }}
+      run: |
+        echo "🔄 Force sync requested, attempting to sync application..."
+        
+        # Install ArgoCD CLI if needed
+        if ! command -v argocd &> /dev/null; then
+          echo "📥 Installing ArgoCD CLI..."
+          curl -sSL -o argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          sudo mv argocd /usr/local/bin/
+        fi
+        
+        # Try to sync with ArgoCD CLI if credentials are available
+        if [[ -n "${{ secrets.ARGOCD_SERVER }}" && -n "${{ secrets.ARGOCD_TOKEN }}" ]]; then
+          echo "🔗 Connecting to ArgoCD server..."
+          argocd login ${{ secrets.ARGOCD_SERVER }} --username admin --password ${{ secrets.ARGOCD_TOKEN }} --insecure
+          
+          APP_NAME="identity-docs-${{ inputs.environment }}"
+          echo "🔄 Force syncing application: $APP_NAME"
+          
+          argocd app sync "$APP_NAME" --force --timeout 600 --prune
+          argocd app wait "$APP_NAME" --timeout 600 --health
+          
+          echo "✅ Application synced successfully!"
+          argocd app get "$APP_NAME" --show-params
+        else
+          echo "ℹ️ ArgoCD CLI credentials not configured - relying on auto-sync"
+          echo "Applications will be synced automatically by ArgoCD controllers"
+        fi
+
+    - name: Verify deployment
+      run: |
+        echo "✅ Verifying ArgoCD deployment status..."
+        
+        # Check ApplicationSet status
+        echo "📋 ApplicationSet Status:"
+        kubectl get applicationset -n argocd identity-docs-environments -o yaml | grep -A 5 -B 5 "status:" || echo "No status available yet"
+        
+        # Check generated Applications
+        echo "📱 Generated Applications:"
+        kubectl get applications -n argocd -l app.kubernetes.io/name=identity-docs -o wide
+        
+        # Check target namespace
+        TARGET_NAMESPACE="docs"
+        if [[ "${{ inputs.environment }}" == "staging" ]]; then
+          TARGET_NAMESPACE="docs-staging"
+        fi
+        
+        echo "🏷️ Target Namespace ($TARGET_NAMESPACE):"
+        kubectl get namespace "$TARGET_NAMESPACE" || echo "Namespace not found - will be created by ArgoCD"
+        
+        if kubectl get namespace "$TARGET_NAMESPACE" > /dev/null 2>&1; then
+          echo "📦 Pods in $TARGET_NAMESPACE:"
+          kubectl get pods -n "$TARGET_NAMESPACE" -l app.kubernetes.io/name=identity-docs || echo "No pods found yet"
+        fi
+
+  deploy-helm:
+    needs: [validate-version]
+    runs-on: ubuntu-latest
+    if: ${{ contains(inputs.deployment_method, 'helm') && needs.validate-version.outputs.chart-exists == 'true' }}
+    environment: ${{ inputs.environment }}
+    steps:
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure kubectl
+      run: |
+        echo "🔧 Configuring kubectl for direct Helm deployment..."
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+        kubectl cluster-info
+
+    - name: Login to Helm registry
+      run: |
+        echo "🔑 Logging into Helm registry..."
+        helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Deploy with Helm
+      run: |
+        echo "🚀 Deploying version ${{ inputs.version }} to ${{ inputs.environment }} via Helm"
+        
+        NAMESPACE="docs"
+        DOMAIN="docs.itlusions.com"
+        if [[ "${{ inputs.environment }}" == "staging" ]]; then
+          NAMESPACE="docs-staging"
+          DOMAIN="docs-staging.itlusions.com"
+        fi
+        
+        CHART_VERSION="${{ needs.validate-version.outputs.chart-version }}"
+        RELEASE_NAME="identity-docs-${{ inputs.environment }}"
+        
+        echo "Configuration:"
+        echo "  - Release: $RELEASE_NAME"
+        echo "  - Namespace: $NAMESPACE"
+        echo "  - Chart Version: $CHART_VERSION"
+        echo "  - Image Tag: ${{ inputs.version }}"
+        echo "  - Domain: $DOMAIN"
+        
+        # Create values file for the deployment
+        cat > deploy-values.yaml << EOF
+        image:
+          repository: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tag: "${{ inputs.version }}"
+          pullPolicy: IfNotPresent
+        
+        replicaCount: ${{ inputs.environment == 'production' && '2' || '1' }}
+        
+        service:
+          type: ClusterIP
+          port: 80
+        
+        ingress:
+          enabled: true
+          className: "traefik"
+          annotations:
+            traefik.ingress.kubernetes.io/router.entrypoints: websecure
+            traefik.ingress.kubernetes.io/router.tls: "true"
+            traefik.ingress.kubernetes.io/router.middlewares: ${NAMESPACE}-identity-stripprefix@kubernetescrd,${NAMESPACE}-headers@kubernetescrd
+          hosts:
+            - host: $DOMAIN
+              paths:
+                - path: /identity
+                  pathType: Prefix
+          tls:
+            - secretName: docs-tls
+              hosts:
+                - $DOMAIN
+        
+        hub:
+          enabled: true
+          centralService: "docs-central"
+          subpath: "identity"
+        
+        resources:
+          limits:
+            cpu: ${{ inputs.environment == 'production' && '200m' || '100m' }}
+            memory: ${{ inputs.environment == 'production' && '256Mi' || '128Mi' }}
+          requests:
+            cpu: ${{ inputs.environment == 'production' && '100m' || '50m' }}
+            memory: ${{ inputs.environment == 'production' && '128Mi' || '64Mi' }}
+        
+        autoscaling:
+          enabled: ${{ inputs.environment == 'production' && 'true' || 'false' }}
+          minReplicas: ${{ inputs.environment == 'production' && '2' || '1' }}
+          maxReplicas: ${{ inputs.environment == 'production' && '10' || '3' }}
+          targetCPUUtilizationPercentage: 80
+          targetMemoryUtilizationPercentage: 80
+        
+        podSecurityContext:
+          fsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        monitoring:
+          enabled: ${{ inputs.environment == 'production' && 'true' || 'false' }}
+          serviceMonitor:
+            enabled: ${{ inputs.environment == 'production' && 'true' || 'false' }}
+            namespace: monitoring
+            interval: 30s
+            scrapeTimeout: 10s
+        
+        labels:
+          environment: ${{ inputs.environment }}
+          app.kubernetes.io/environment: ${{ inputs.environment }}
+          deployment.method: helm-direct
+          deployment.version: ${{ inputs.version }}
+        EOF
+        
+        echo "📄 Deployment values:"
+        echo "===================="
+        cat deploy-values.yaml
+        
+        echo ""
+        echo "🚀 Starting Helm deployment..."
+        
+        # Deploy with Helm
+        helm upgrade --install "$RELEASE_NAME" \
+          oci://${{ env.REGISTRY }}/itlusions/helm/identity-docs \
+          --version "$CHART_VERSION" \
+          --namespace "$NAMESPACE" \
+          --create-namespace \
+          --values deploy-values.yaml \
+          --wait \
+          --timeout 10m \
+          ${{ inputs.force_sync && '--force' || '' }}
+        
+        echo "✅ Helm deployment completed successfully!"
+
+    - name: Verify Helm deployment
+      run: |
+        NAMESPACE="docs"
+        if [[ "${{ inputs.environment }}" == "staging" ]]; then
+          NAMESPACE="docs-staging"
+        fi
+        
+        echo "✅ Verifying Helm deployment in namespace: $NAMESPACE"
+        
+        # Show Helm release status
+        echo "📊 Helm Release Status:"
+        helm status identity-docs-${{ inputs.environment }} -n "$NAMESPACE"
+        
+        echo ""
+        echo "📦 Pod Status:"
+        kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=identity-docs -o wide
+        
+        echo ""
+        echo "🌐 Service Status:"
+        kubectl get services -n "$NAMESPACE" -l app.kubernetes.io/name=identity-docs
+        
+        echo ""
+        echo "🔗 Ingress Status:"
+        kubectl get ingress -n "$NAMESPACE" -l app.kubernetes.io/name=identity-docs
+        
+        echo ""
+        echo "📊 Deployment Summary:"
+        echo "  - Version: ${{ inputs.version }}"
+        echo "  - Environment: ${{ inputs.environment }}"
+        echo "  - Namespace: $NAMESPACE"
+        echo "  - Release: identity-docs-${{ inputs.environment }}"
+        echo "  - URL: https://${{ inputs.environment == 'production' && 'docs.itlusions.com' || 'docs-staging.itlusions.com' }}/identity/"
+
+  notify-deployment:
+    needs: [validate-version, deploy-argocd, deploy-helm]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Determine deployment status
+      id: status
+      run: |
+        ARGOCD_STATUS="${{ needs.deploy-argocd.result || 'skipped' }}"
+        HELM_STATUS="${{ needs.deploy-helm.result || 'skipped' }}"
+        
+        echo "ArgoCD Status: $ARGOCD_STATUS"
+        echo "Helm Status: $HELM_STATUS"
+        
+        if [[ "$ARGOCD_STATUS" == "success" || "$HELM_STATUS" == "success" ]]; then
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "emoji=✅" >> $GITHUB_OUTPUT
+          echo "color=28a745" >> $GITHUB_OUTPUT
+        elif [[ "$ARGOCD_STATUS" == "failure" || "$HELM_STATUS" == "failure" ]]; then
+          echo "status=failure" >> $GITHUB_OUTPUT
+          echo "emoji=❌" >> $GITHUB_OUTPUT
+          echo "color=d73a49" >> $GITHUB_OUTPUT
+        else
+          echo "status=skipped" >> $GITHUB_OUTPUT
+          echo "emoji=⏭️" >> $GITHUB_OUTPUT
+          echo "color=6f42c1" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create deployment summary
+      run: |
+        echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Version** | \`${{ inputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Environment** | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Method** | \`${{ inputs.deployment_method }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Force Sync** | \`${{ inputs.force_sync }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Actor** | \`${{ github.actor }}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📊 Deployment Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Method | Status | Result |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|--------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| ArgoCD | ${{ needs.deploy-argocd.result == 'success' && '✅ Success' || needs.deploy-argocd.result == 'failure' && '❌ Failed' || '⏭️ Skipped' }} | ${{ needs.deploy-argocd.result || 'not executed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Helm Direct | ${{ needs.deploy-helm.result == 'success' && '✅ Success' || needs.deploy-helm.result == 'failure' && '❌ Failed' || '⏭️ Skipped' }} | ${{ needs.deploy-helm.result || 'not executed' }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔗 Access Information" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Documentation URL**: https://${{ inputs.environment == 'production' && 'docs.itlusions.com' || 'docs-staging.itlusions.com' }}/identity/" >> $GITHUB_STEP_SUMMARY
+        echo "- **Chart Version**: \`${{ needs.validate-version.outputs.chart-version }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+
+    - name: Notify Teams
+      if: ${{ secrets.TEAMS_WEBHOOK }}
+      run: |
+        echo "📧 Sending Teams notification..."
+        
+        # Create Teams payload
+        cat > teams_payload.json << EOF
+        {
+          "title": "Version-Specific Deployment: ${{ inputs.version }}",
+          "status": "${{ steps.status.outputs.status }}",
+          "emoji": "${{ steps.status.outputs.emoji }}",
+          "color": "${{ steps.status.outputs.color }}",
+          "version": "${{ inputs.version }}",
+          "environment": "${{ inputs.environment }}",
+          "method": "${{ inputs.deployment_method }}",
+          "actor": "${{ github.actor }}",
+          "force_sync": "${{ inputs.force_sync }}",
+          "chart_version": "${{ needs.validate-version.outputs.chart-version }}",
+          "argocd_status": "${{ needs.deploy-argocd.result || 'skipped' }}",
+          "helm_status": "${{ needs.deploy-helm.result || 'skipped' }}",
+          "documentation_url": "https://${{ inputs.environment == 'production' && 'docs.itlusions.com' || 'docs-staging.itlusions.com' }}/identity/",
+          "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        EOF
+        
+        echo "📄 Teams notification payload:"
+        cat teams_payload.json
+        
+        # Send notification
+        curl -H "Content-Type: application/json" \
+             -d @teams_payload.json \
+             "${{ secrets.TEAMS_WEBHOOK }}"
+        
+        if [ $? -eq 0 ]; then
+          echo "✅ Teams notification sent successfully"
+        else
+          echo "❌ Failed to send Teams notification"
+        fi

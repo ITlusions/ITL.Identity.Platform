@@ -1,0 +1,143 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: identity-docs
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: identity-docs
+    app.kubernetes.io/part-of: itl-platform
+    app.kubernetes.io/component: documentation
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/sync-options: CreateNamespace=true
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  
+  source:
+    # Using Helm chart from GHCR
+    repoURL: ghcr.io/itlusions/helm
+    chart: identity-docs
+    targetRevision: "1.0.0"  # This should be updated with each release
+    helm:
+      releaseName: identity-docs
+      values: |
+        # Image configuration
+        image:
+          repository: ghcr.io/itlusions/identity-docs
+          tag: "v1.0.0"  # This should match the chart version
+          pullPolicy: IfNotPresent
+        
+        # Service configuration
+        service:
+          type: ClusterIP
+          port: 80
+        
+        # Ingress configuration for central hub
+        ingress:
+          enabled: true
+          className: "traefik"
+          annotations:
+            traefik.ingress.kubernetes.io/router.entrypoints: websecure
+            traefik.ingress.kubernetes.io/router.tls: "true"
+            # Support subpath routing
+            traefik.ingress.kubernetes.io/router.middlewares: docs-identity-stripprefix@kubernetescrd,docs-headers@kubernetescrd
+          hosts:
+            - host: docs.itlusions.com
+              paths:
+                - path: /identity
+                  pathType: Prefix
+          tls:
+            - secretName: docs-tls
+              hosts:
+                - docs.itlusions.com
+        
+        # Central hub configuration
+        hub:
+          enabled: true
+          centralService: "docs-central"
+          subpath: "identity"
+        
+        # Resource limits
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        
+        # Auto-scaling
+        autoscaling:
+          enabled: true
+          minReplicas: 2
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 80
+          targetMemoryUtilizationPercentage: 80
+        
+        # Pod security context
+        podSecurityContext:
+          fsGroup: 1000
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsNonRoot: true
+          runAsUser: 1000
+        
+        # Monitoring
+        monitoring:
+          enabled: true
+          serviceMonitor:
+            enabled: true
+            namespace: monitoring
+            interval: 30s
+            scrapeTimeout: 10s
+        
+        # Node selector for documentation workloads
+        nodeSelector:
+          workload-type: "docs"
+        
+        # Tolerations for dedicated nodes
+        tolerations:
+          - key: "docs-workload"
+            operator: "Equal"
+            value: "true"
+            effect: "NoSchedule"
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: docs
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  revisionHistoryLimit: 10
+
+  info:
+    - name: 'Documentation URL'
+      value: 'https://docs.itlusions.com/identity/'
+    - name: 'Repository'
+      value: 'https://github.com/ITlusions/ITL.Identity.Platform'
+    - name: 'Helm Chart'
+      value: 'oci://ghcr.io/itlusions/helm/identity-docs'

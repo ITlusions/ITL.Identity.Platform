@@ -1,0 +1,122 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: itl-docs
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: itl-docs-project
+    app.kubernetes.io/part-of: itl-platform
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  description: ITL Platform Documentation Services Project
+  
+  # Source repositories
+  sourceRepos:
+    - 'https://github.com/ITlusions/*'
+    - 'ghcr.io/itlusions/helm/*'
+    - 'oci://ghcr.io/itlusions/helm/*'
+  
+  # Allowed destination clusters and namespaces
+  destinations:
+    - namespace: 'docs'
+      server: https://kubernetes.default.svc
+    - namespace: 'docs-*'
+      server: https://kubernetes.default.svc
+    - namespace: 'monitoring'
+      server: https://kubernetes.default.svc
+  
+  # Cluster resource allow list
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: 'traefik.containo.us'
+      kind: IngressRoute
+    - group: 'traefik.containo.us'
+      kind: Middleware
+    - group: 'monitoring.coreos.com'
+      kind: ServiceMonitor
+    - group: 'cert-manager.io'
+      kind: ClusterIssuer
+  
+  # Namespace resource allow list
+  namespaceResourceWhitelist:
+    - group: ''
+      kind: ConfigMap
+    - group: ''
+      kind: Secret
+    - group: ''
+      kind: Service
+    - group: ''
+      kind: ServiceAccount
+    - group: 'apps'
+      kind: Deployment
+    - group: 'apps'
+      kind: ReplicaSet
+    - group: ''
+      kind: Pod
+    - group: 'networking.k8s.io'
+      kind: Ingress
+    - group: 'traefik.containo.us'
+      kind: IngressRoute
+    - group: 'traefik.containo.us'
+      kind: Middleware
+    - group: 'monitoring.coreos.com'
+      kind: ServiceMonitor
+    - group: 'autoscaling'
+      kind: HorizontalPodAutoscaler
+    - group: 'policy'
+      kind: PodDisruptionBudget
+    - group: 'rbac.authorization.k8s.io'
+      kind: Role
+    - group: 'rbac.authorization.k8s.io'
+      kind: RoleBinding
+  
+  # RBAC roles for this project
+  roles:
+    - name: docs-admin
+      description: Admin access to documentation services
+      policies:
+        - p, proj:itl-docs:docs-admin, applications, *, itl-docs/*, allow
+        - p, proj:itl-docs:docs-admin, repositories, *, *, allow
+        - p, proj:itl-docs:docs-admin, clusters, *, *, allow
+      groups:
+        - itl:platform-team
+        - itl:docs-admins
+    
+    - name: docs-developer
+      description: Developer access to documentation services
+      policies:
+        - p, proj:itl-docs:docs-developer, applications, get, itl-docs/*, allow
+        - p, proj:itl-docs:docs-developer, applications, sync, itl-docs/*, allow
+        - p, proj:itl-docs:docs-developer, applications, action/*, itl-docs/*, allow
+        - p, proj:itl-docs:docs-developer, repositories, get, *, allow
+      groups:
+        - itl:developers
+    
+    - name: docs-viewer
+      description: Read-only access to documentation services
+      policies:
+        - p, proj:itl-docs:docs-viewer, applications, get, itl-docs/*, allow
+        - p, proj:itl-docs:docs-viewer, repositories, get, *, allow
+      groups:
+        - itl:all-users
+
+  # Sync windows
+  syncWindows:
+    - kind: allow
+      schedule: '* * * * *'  # Always allow sync
+      duration: 24h
+      applications:
+        - '*'
+      manualSync: true
+    - kind: deny
+      schedule: '0 2 * * 1-5'  # Deny automatic sync during maintenance window (2 AM weekdays)
+      duration: 2h
+      applications:
+        - '*'
+      manualSync: false
+
+  # Signature keys for verification
+  signatureKeys:
+    - keyID: "identity-docs-signing-key"

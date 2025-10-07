@@ -1,0 +1,182 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: identity-docs-environments
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: identity-docs-applicationset
+    app.kubernetes.io/part-of: itl-platform
+    app.kubernetes.io/component: documentation
+spec:
+  generators:
+  # Environment-based generator
+  - list:
+      elements:
+      - environment: staging
+        namespace: docs-staging
+        domain: docs-staging.itlusions.com
+        chartVersion: "1.0.0"
+        imageTag: "main"
+        replicas: 1
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      - environment: production
+        namespace: docs
+        domain: docs.itlusions.com
+        chartVersion: "1.0.0"
+        imageTag: "v1.0.0"
+        replicas: 2
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+  
+  template:
+    metadata:
+      name: 'identity-docs-{{environment}}'
+      namespace: argocd
+      labels:
+        app.kubernetes.io/name: identity-docs
+        app.kubernetes.io/environment: '{{environment}}'
+        app.kubernetes.io/part-of: itl-platform
+        app.kubernetes.io/component: documentation
+      annotations:
+        argocd.argoproj.io/sync-wave: "2"
+        argocd.argoproj.io/sync-options: CreateNamespace=true
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    
+    spec:
+      project: itl-docs
+      
+      source:
+        repoURL: ghcr.io/itlusions/helm
+        chart: identity-docs
+        targetRevision: '{{chartVersion}}'
+        helm:
+          releaseName: 'identity-docs-{{environment}}'
+          values: |
+            # Image configuration
+            image:
+              repository: ghcr.io/itlusions/identity-docs
+              tag: "{{imageTag}}"
+              pullPolicy: IfNotPresent
+            
+            # Replica configuration
+            replicaCount: {{replicas}}
+            
+            # Service configuration
+            service:
+              type: ClusterIP
+              port: 80
+            
+            # Ingress configuration
+            ingress:
+              enabled: true
+              className: "traefik"
+              annotations:
+                traefik.ingress.kubernetes.io/router.entrypoints: websecure
+                traefik.ingress.kubernetes.io/router.tls: "true"
+                traefik.ingress.kubernetes.io/router.middlewares: {{namespace}}-identity-stripprefix@kubernetescrd,{{namespace}}-headers@kubernetescrd
+              hosts:
+                - host: {{domain}}
+                  paths:
+                    - path: /identity
+                      pathType: Prefix
+              tls:
+                - secretName: docs-tls
+                  hosts:
+                    - {{domain}}
+            
+            # Central hub configuration
+            hub:
+              enabled: true
+              centralService: "docs-central"
+              subpath: "identity"
+            
+            # Resource configuration
+            resources:
+              limits:
+                cpu: {{resources.limits.cpu}}
+                memory: {{resources.limits.memory}}
+              requests:
+                cpu: {{resources.requests.cpu}}
+                memory: {{resources.requests.memory}}
+            
+            # Auto-scaling (production only)
+            autoscaling:
+              enabled: {{ if eq .environment "production" }}true{{ else }}false{{ end }}
+              minReplicas: {{replicas}}
+              maxReplicas: {{ if eq .environment "production" }}10{{ else }}3{{ end }}
+              targetCPUUtilizationPercentage: 80
+              targetMemoryUtilizationPercentage: 80
+            
+            # Pod security context
+            podSecurityContext:
+              fsGroup: 1000
+              runAsNonRoot: true
+              runAsUser: 1000
+            
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              readOnlyRootFilesystem: false
+              runAsNonRoot: true
+              runAsUser: 1000
+            
+            # Monitoring (production only)
+            monitoring:
+              enabled: {{ if eq .environment "production" }}true{{ else }}false{{ end }}
+              serviceMonitor:
+                enabled: {{ if eq .environment "production" }}true{{ else }}false{{ end }}
+                namespace: monitoring
+                interval: 30s
+                scrapeTimeout: 10s
+            
+            # Environment-specific labels
+            labels:
+              environment: {{environment}}
+              app.kubernetes.io/environment: {{environment}}
+      
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+          - PruneLast=true
+          - ApplyOutOfSyncOnly=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+      
+      revisionHistoryLimit: 10
+      
+      info:
+        - name: 'Environment'
+          value: '{{environment}}'
+        - name: 'Documentation URL'
+          value: 'https://{{domain}}/identity/'
+        - name: 'Repository'
+          value: 'https://github.com/ITlusions/ITL.Identity.Platform'
+        - name: 'Helm Chart'
+          value: 'oci://ghcr.io/itlusions/helm/identity-docs:{{chartVersion}}'
