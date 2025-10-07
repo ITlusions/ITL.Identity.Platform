@@ -24,9 +24,12 @@ COPY mkdocs.yml .
 # Build the documentation directly to nginx html directory
 RUN mkdocs build --clean --strict --site-dir /usr/share/nginx/html
 
-# Create necessary directories with proper permissions
-RUN mkdir -p /var/cache/nginx /var/run /var/log/nginx && \
-    chown -R nginx-user:nginx-user /var/cache/nginx /var/run /var/log/nginx /usr/share/nginx/html
+# Create necessary directories with proper permissions for nginx
+RUN mkdir -p /var/cache/nginx /var/run /var/log/nginx /app/logs && \
+    chown -R nginx-user:nginx-user /var/cache/nginx /var/run /var/log/nginx /usr/share/nginx/html /app/logs && \
+    touch /app/logs/nginx.pid /app/logs/access.log /app/logs/error.log && \
+    chown nginx-user:nginx-user /app/logs/nginx.pid /app/logs/access.log /app/logs/error.log && \
+    chmod 755 /app/logs
 
 # Configure nginx for subpath serving and health checks
 COPY <<EOF /etc/nginx/conf.d/default.conf
@@ -83,16 +86,84 @@ server {
 }
 EOF
 
-# Configure nginx to run as non-root
-RUN sed -i 's/^user  nginx;/user  nginx-user;/' /etc/nginx/nginx.conf && \
-    sed -i 's|/var/run/nginx.pid|/tmp/nginx.pid|' /etc/nginx/nginx.conf && \
-    sed -i 's|/var/log/nginx/access.log|/tmp/access.log|' /etc/nginx/nginx.conf && \
-    sed -i 's|/var/log/nginx/error.log|/tmp/error.log|' /etc/nginx/nginx.conf
+# Configure nginx to run as non-root user
+RUN cp /etc/nginx/nginx.conf /etc/nginx/nginx.conf.backup
+
+# Create a custom nginx.conf for non-root operation
+COPY <<EOF /etc/nginx/nginx.conf
+# Run as non-root user
+worker_processes auto;
+error_log /app/logs/error.log warn;
+pid /app/logs/nginx.pid;
+
+events {
+    worker_connections 1024;
+    multi_accept on;
+    use epoll;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    # Logging
+    log_format main '\$remote_addr - \$remote_user [\$time_local] "\$request" '
+                    '\$status \$body_bytes_sent "\$http_referer" '
+                    '"\$http_user_agent" "\$http_x_forwarded_for"';
+    access_log /app/logs/access.log main;
+
+    # Performance optimizations
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    # Gzip compression
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types
+        application/atom+xml
+        application/javascript
+        application/json
+        application/ld+json
+        application/manifest+json
+        application/rss+xml
+        application/vnd.geo+json
+        application/vnd.ms-fontobject
+        application/x-font-ttf
+        application/x-web-app-manifest+json
+        application/xhtml+xml
+        application/xml
+        font/opentype
+        image/bmp
+        image/svg+xml
+        image/x-icon
+        text/cache-manifest
+        text/css
+        text/plain
+        text/vcard
+        text/vnd.rim.location.xloc
+        text/vtt
+        text/x-component
+        text/x-cross-domain-policy;
+
+    # Security headers (these will be added by site config too)
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Include site configurations
+    include /etc/nginx/conf.d/*.conf;
+}
+EOF
 
 # Clean up build dependencies to reduce image size
 RUN pip3 uninstall -y pip --break-system-packages || true && \
     apk del git py3-pip && \
-    rm -rf /app /root/.cache /tmp/* /var/cache/apk/*
+    rm -rf /root/.cache /tmp/* /var/cache/apk/* && \
+    cd /app && rm -rf docs/ mkdocs.yml requirements.txt
 
 # Switch to non-root user
 USER nginx-user
