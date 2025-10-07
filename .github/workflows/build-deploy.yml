@@ -334,35 +334,167 @@ jobs:
       with:
         sarif_file: 'trivy-results.sarif'
 
-  # Package Helm chart
-  # package-helm:
-  #   needs: [helm-lint]
-  #   runs-on: ubuntu-latest
-  #   if: github.ref == 'refs/heads/main'
+  # Package and push Helm chart to GHCR
+  helm-package:
+    needs: [helm-lint]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      packages: write
     
-  #   steps:
-  #   - name: Checkout repository
-  #     uses: actions/checkout@v4
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-  #   - name: Set up Helm
-  #     uses: azure/setup-helm@v3
-  #     with:
-  #       version: '3.12.0'
+    - name: Set up Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
 
-  #   - name: Package Helm chart
-  #     run: |
-  #       helm package charts/identity-docs --destination ./helm-packages
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
-  #   - name: Upload Helm package
-  #     uses: actions/upload-artifact@v3
-  #     with:
-  #       name: helm-chart
-  #       path: helm-packages/*.tgz
-  #      retention-days: 30
+    - name: Package Helm chart
+      run: |
+        echo "📦 Packaging Helm chart for version ${{ github.ref_name }}"
+        
+        # Create helm packages directory
+        mkdir -p helm-packages
+        
+        # Package the chart with the version from the tag (remove 'v' prefix)
+        CHART_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+        echo "Chart version: $CHART_VERSION"
+        
+        # Update Chart.yaml with the release version
+        sed -i "s/version: .*/version: $CHART_VERSION/" charts/identity-docs/Chart.yaml
+        sed -i "s/appVersion: .*/appVersion: ${{ github.ref_name }}/" charts/identity-docs/Chart.yaml
+        
+        # Package the chart
+        helm package charts/identity-docs \
+          --version "$CHART_VERSION" \
+          --app-version "${{ github.ref_name }}" \
+          --destination helm-packages/
+        
+        echo "✅ Chart packaged successfully"
+        ls -la helm-packages/
+
+    - name: Push Helm chart to GHCR
+      run: |
+        echo "🚀 Pushing Helm chart to GitHub Container Registry"
+        
+        # Enable OCI support for Helm
+        export HELM_EXPERIMENTAL_OCI=1
+        
+        # Chart version without 'v' prefix
+        CHART_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+        
+        # Define the OCI repository URL
+        CHART_REPO="${{ env.REGISTRY }}/itlusions/helm/identity-docs"
+        
+        echo "Chart repository: $CHART_REPO"
+        echo "Chart version: $CHART_VERSION"
+        
+        # Find the packaged chart file
+        CHART_FILE=$(find helm-packages -name "identity-docs-*.tgz" | head -1)
+        if [ -z "$CHART_FILE" ]; then
+          echo "❌ No chart file found in helm-packages/"
+          ls -la helm-packages/
+          exit 1
+        fi
+        
+        echo "Chart file: $CHART_FILE"
+        
+        # Push the chart
+        helm push "$CHART_FILE" "oci://${{ env.REGISTRY }}/itlusions/helm"
+        
+        echo "✅ Helm chart pushed successfully to $CHART_REPO:$CHART_VERSION"
+        
+        # Verify the push
+        echo "🔍 Verifying chart availability..."
+        helm show chart "oci://$CHART_REPO" --version "$CHART_VERSION" || echo "⚠️ Chart verification failed (may be due to propagation delay)"
+
+    - name: Upload Helm package artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: helm-chart-package
+        path: helm-packages/*.tgz
+        if-no-files-found: error
+        retention-days: 30
+        overwrite: true
+
+    - name: Generate installation instructions
+      run: |
+        CHART_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+        CHART_REPO="${{ env.REGISTRY }}/itlusions/helm/identity-docs"
+        
+        cat > helm-install-instructions.md << EOF
+        # Identity Platform Helm Chart Installation
+        
+        ## Version: ${{ github.ref_name }}
+        
+        ### Install from GitHub Container Registry
+        
+        \`\`\`bash
+        # Add the chart repository (one-time setup)
+        helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }}
+        
+        # Install the chart
+        helm install identity-docs oci://$CHART_REPO --version $CHART_VERSION
+        
+        # Or upgrade existing installation
+        helm upgrade identity-docs oci://$CHART_REPO --version $CHART_VERSION
+        \`\`\`
+        
+        ### Install with custom values
+        
+        \`\`\`bash
+        # Create your values file
+        cat > my-values.yaml << EOL
+        image:
+          tag: "${{ github.ref_name }}"
+        ingress:
+          hosts:
+            - host: docs.yourdomain.com
+              paths:
+                - path: /identity
+                  pathType: Prefix
+        EOL
+        
+        # Install with custom values
+        helm install identity-docs oci://$CHART_REPO --version $CHART_VERSION -f my-values.yaml
+        \`\`\`
+        
+        ### Chart Information
+        - **Chart Version**: $CHART_VERSION
+        - **App Version**: ${{ github.ref_name }}
+        - **Registry**: ${{ env.REGISTRY }}
+        - **Repository**: itlusions/helm/identity-docs
+        - **Full OCI URL**: oci://$CHART_REPO
+        
+        ### Available in GitHub Packages
+        The chart is also available in the [GitHub Packages](https://github.com/ITlusions/ITL.identity.platform/pkgs/container/helm%2Fidentity-docs) for this repository.
+        EOF
+        
+        echo "📋 Installation instructions generated"
+        cat helm-install-instructions.md
+
+    - name: Upload installation instructions
+      uses: actions/upload-artifact@v4
+      with:
+        name: helm-install-instructions
+        path: helm-install-instructions.md
+        if-no-files-found: error
+        retention-days: 90
+        overwrite: true
 
   # Deploy only for version tags
   deploy:
-    needs: [build, security-scan]
+    needs: [build, helm-package, security-scan]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     environment: production
@@ -412,8 +544,138 @@ jobs:
         # Create documentation archive
         tar -czf release-artifacts/identity-docs-site-${{ github.ref_name }}.tar.gz -C site .
         
-        # Package Helm chart
-        helm package charts/identity-docs --destination release-artifacts --version ${{ github.ref_name }}
+        # Package Helm chart for release (local copy)
+        CHART_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+        helm package charts/identity-docs \
+          --version "$CHART_VERSION" \
+          --app-version "${{ github.ref_name }}" \
+          --destination release-artifacts/
+        
+        # Download the installation instructions from the helm-package job
+        echo "📋 Creating Helm installation guide..."
+        cat > release-artifacts/HELM_INSTALLATION.md << EOF
+        # Identity Platform Helm Chart Installation Guide
+        
+        ## Version: ${{ github.ref_name }}
+        
+        ### Option 1: Install from GitHub Container Registry (Recommended)
+        
+        \`\`\`bash
+        # Login to GitHub Container Registry
+        helm registry login ghcr.io -u ${{ github.actor }}
+        
+        # Install the chart
+        helm install identity-docs oci://ghcr.io/itlusions/helm/identity-docs --version $CHART_VERSION
+        \`\`\`
+        
+        ### Option 2: Install from Release Assets
+        
+        \`\`\`bash
+        # Download the chart from this release
+        wget https://github.com/ITlusions/ITL.identity.platform/releases/download/${{ github.ref_name }}/identity-docs-$CHART_VERSION.tgz
+        
+        # Install the chart
+        helm install identity-docs ./identity-docs-$CHART_VERSION.tgz
+        \`\`\`
+        
+        ### Custom Values Example
+        
+        \`\`\`yaml
+        # values.yaml
+        image:
+          tag: "${{ github.ref_name }}"
+        
+        ingress:
+          enabled: true
+          hosts:
+            - host: docs.yourdomain.com
+              paths:
+                - path: /identity
+                  pathType: Prefix
+        
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        \`\`\`
+        
+        \`\`\`bash
+        helm install identity-docs oci://ghcr.io/itlusions/helm/identity-docs \\
+          --version $CHART_VERSION \\
+          --values values.yaml
+        \`\`\`
+        
+        ### Chart Information
+        - **Chart Version**: $CHART_VERSION
+        - **App Version**: ${{ github.ref_name }}
+        - **OCI Registry**: oci://ghcr.io/itlusions/helm/identity-docs
+        - **Documentation**: https://docs.itlusions.com/identity/
+        - **Repository**: https://github.com/ITlusions/ITL.identity.platform
+        EOF
+        
+        echo "📦 Release artifacts created:"
+        ls -la release-artifacts/
+
+    - name: Deploy to Central Hub
+      run: |
+        echo "Deploying Identity Platform docs to central hub"
+        echo "Version: ${{ github.ref_name }}"
+        echo "Subpath: /identity"
+        echo "Central Hub URL: https://docs.itlusions.com/identity/"
+        
+        # Generate manifests for central hub deployment
+        CHART_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+        helm template identity-docs charts/identity-docs \
+          --set image.tag=${{ github.ref_name }} \
+          --set ingress.hosts[0].host=docs.itlusions.com \
+          --set hub.enabled=true \
+          --set hub.subpath=identity \
+          --validate=false > manifests-central-hub.yaml
+        
+        echo "Generated manifests for central hub integration"
+        
+        # Here you would typically:
+        # 1. Apply to your Kubernetes cluster
+        # 2. Update ArgoCD application
+        # 3. Or sync with your GitOps repository
+        
+        # Example ArgoCD sync (uncomment when ready):
+        # argocd app sync identity-docs --revision ${{ github.ref_name }}
+
+    - name: Update Central Hub Registry
+      run: |
+        echo "Registering Identity Platform with central hub"
+        
+        # Create service registration payload
+        cat > service-registration.json << EOF
+        {
+          "name": "Identity Platform",
+          "path": "/identity",
+          "description": "Authentication and authorization platform",
+          "version": "${{ github.ref_name }}",
+          "status": "production",
+          "health_endpoint": "/identity/health",
+          "documentation_url": "https://docs.itlusions.com/identity/",
+          "repository": "${{ github.repository }}",
+          "last_updated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "helm_chart": {
+            "registry": "oci://ghcr.io/itlusions/helm/identity-docs",
+            "version": "$(echo "${{ github.ref_name }}" | sed 's/^v//')"
+          }
+        }
+        EOF
+        
+        echo "Service registration payload created"
+        cat service-registration.json
+        
+        # This would typically POST to your central hub's API
+        # curl -X POST https://docs.itlusions.com/api/services \
+        #   -H "Content-Type: application/json" \
+        #   -H "Authorization: Bearer ${{ secrets.HUB_API_TOKEN }}" \
+        #   -d @service-registration.json
 
     - name: Upload Artifacts to Existing Release
       run: |
@@ -505,6 +767,7 @@ jobs:
         if [ "$MESSAGE_TYPE" = "powerautomate" ]; then
           echo "📝 Creating Power Automate payload..."
           # Power Automate expects simpler JSON structure
+          CHART_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
           cat > teams_payload.json << EOF
         {
           "title": "ITL Identity Platform Deployment",
@@ -518,12 +781,18 @@ jobs:
           "workflow_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
           "repository": "${{ github.repository }}",
           "event": "${{ github.event_name }}",
-          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "helm_chart": {
+            "version": "$CHART_VERSION",
+            "registry": "oci://ghcr.io/itlusions/helm/identity-docs"
+          },
+          "documentation_url": "https://docs.itlusions.com/identity/"
         }
         EOF
         else
           echo "📝 Creating Teams MessageCard payload..."
           # Direct Teams webhook expects MessageCard format
+          CHART_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
           cat > teams_payload.json << EOF
         {
           "@type": "MessageCard",
@@ -555,6 +824,10 @@ jobs:
                 {
                   "name": "Actor:",
                   "value": "${{ github.actor }}"
+                },
+                {
+                  "name": "Helm Chart:",
+                  "value": "v$CHART_VERSION available in GHCR"
                 }
               ],
               "markdown": true
@@ -568,6 +841,16 @@ jobs:
                 {
                   "os": "default",
                   "uri": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                }
+              ]
+            },
+            {
+              "@type": "OpenUri",
+              "name": "View Documentation",
+              "targets": [
+                {
+                  "os": "default",
+                  "uri": "https://docs.itlusions.com/identity/"
                 }
               ]
             }
